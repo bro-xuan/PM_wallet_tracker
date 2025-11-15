@@ -1,3 +1,14 @@
+⚠️ Deployment note: Background timers are not reliable on serverless (e.g., Vercel autoscaling). For production serverless you’d:
+
+Move the poller to a small Node worker (or a cron job) and
+
+Use a shared store / pubsub (Postgres LISTEN/NOTIFY, Upstash Redis Pub/Sub) for the SSE route.
+For local or a single VPS/container, the below setup works great.
+
+
+
+
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
