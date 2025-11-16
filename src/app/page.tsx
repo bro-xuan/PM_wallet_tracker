@@ -37,6 +37,7 @@ export default function Home() {
   const [walletFilter, setWalletFilter] = useState('');
   const [notionalPreset, setNotionalPreset] = useState('');
   const [sideFilter, setSideFilter] = useState('');
+  const [priceFilter, setPriceFilter] = useState('');
   const [timeZone, setTimeZone] = useState('UTC');
   const [labels, setLabels] = useState<Record<string, string>>({});
   const walletsRef = useRef<Set<string>>(new Set());
@@ -201,6 +202,14 @@ export default function Home() {
       if (!walletsSet.has(t.wallet.toLowerCase())) return false;
       if (minNotional > 0 && t.notional < minNotional) return false;
       if (sideFilter && t.side !== sideFilter) return false;
+      if (priceFilter) {
+        const p = t.price;
+        if (priceFilter === 'extreme') {
+          if (!((p >= 0 && p < 0.05) || (p > 0.95 && p <= 1))) return false;
+        } else if (priceFilter === 'middle') {
+          if (!(p >= 0.05 && p <= 0.95)) return false;
+        }
+      }
       if (walletQuery) {
         const label = labels[t.wallet.toLowerCase()] || '';
         const hay = `${label} ${t.wallet}`.toLowerCase();
@@ -208,7 +217,7 @@ export default function Home() {
       }
       return true;
     });
-  }, [trades, walletFilter, notionalPreset, sideFilter, walletsSet, labels]);
+  }, [trades, walletFilter, notionalPreset, sideFilter, priceFilter, walletsSet, labels]);
 
   function editLabel(addr: string) {
     const current = labels[addr.toLowerCase()] || '';
@@ -313,11 +322,20 @@ export default function Home() {
                 <option value="BUY">Buy only</option>
                 <option value="SELL">Sell only</option>
               </select>
+              <select
+                value={priceFilter}
+                onChange={e=>setPriceFilter(e.target.value)}
+                style={{width:180}}
+              >
+                <option value="">All prices</option>
+                <option value="extreme">0-5% &amp; 95%-100%</option>
+                <option value="middle">5-95%</option>
+              </select>
               <span className="tag">{filtered.length}</span>
             </div>
           </div>
 
-          <div style={{overflow:'auto', maxHeight:'calc(100vh - 260px)'}}>
+          <div style={{overflow:'auto', maxHeight:'calc(100vh - 260px)', marginTop:12}}>
             <table>
               <thead>
                 <tr>

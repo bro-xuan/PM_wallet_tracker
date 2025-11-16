@@ -25,9 +25,25 @@ main{ padding:20px; display:grid; gap:20px; grid-template-columns: 360px 1fr; }
 .file-row{ flex-wrap:wrap }
 .file-row input[type="file"]{ flex:1; min-width:0 }
 .file-row button{ flex: 0 0 auto }
-input,button,select{ padding:10px 12px; border-radius:10px; border:1px solid #2a375d; background:#0e152a; color:var(--ink) }
+input,button,select{
+  padding:10px 12px;
+  border-radius:10px;
+  border:1px solid #2a375d;
+  background:#0e152a;
+  color:var(--ink);
+  font:inherit;
+}
 button{ background:#152042; cursor:pointer }
 button:hover{ border-color:#39518d }
+input:focus-visible, select:focus-visible, button:focus-visible{
+  outline:none;
+  border-color:#4b6bff;
+  box-shadow:0 0 0 1px #4b6bff;
+}
+select{
+  /* keep native arrow but tighten overall look */
+  min-height:42px;
+}
 table{ width:100%; border-collapse:collapse; font-size:14px }
 th,td{ padding:10px 8px; border-bottom:1px solid var(--line); vertical-align:middle }
 th{ text-align:left; font-weight:600; color:#b9c6e5; position:sticky; top:0; background:#0b1020d0; backdrop-filter:saturate(140%) blur(6px); z-index:1 }
