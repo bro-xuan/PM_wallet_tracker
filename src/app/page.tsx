@@ -198,6 +198,7 @@ export default function Home() {
   const filtered = useMemo(() => {
     const walletQuery = walletFilter.trim().toLowerCase();
     const minNotional = Number(notionalPreset || 0);
+    const seen = new Set<string>();
     return trades.filter(t => {
       if (!walletsSet.has(t.wallet.toLowerCase())) return false;
       if (minNotional > 0 && t.notional < minNotional) return false;
@@ -215,6 +216,9 @@ export default function Home() {
         const hay = `${label} ${t.wallet}`.toLowerCase();
         if (!hay.includes(walletQuery)) return false;
       }
+      const uniqueKey = `${t.txhash}-${t.wallet}-${t.timestamp}`;
+      if (seen.has(uniqueKey)) return false;
+      seen.add(uniqueKey);
       return true;
     });
   }, [trades, walletFilter, notionalPreset, sideFilter, priceFilter, walletsSet, labels]);
@@ -274,7 +278,7 @@ export default function Home() {
           </div>
 
           <h4 style={{marginTop:18}}>Current wallets</h4>
-          <ul style={{listStyle:'none', paddingLeft:0, margin:0}}>
+          <ul style={{listStyle:'none', paddingLeft:0, margin:0, maxHeight:'400px', overflowY:'auto'}}>
             {wallets.map(a => (
               <li key={a} className="row">
                 <div style={{flex:1}}>
@@ -351,7 +355,7 @@ export default function Home() {
               </thead>
               <tbody>
                 {filtered.map(t => (
-                  <tr key={t.txhash}>
+                  <tr key={`${t.txhash}-${t.wallet}-${t.timestamp}`}>
                     <td className="nowrap">{formatTime(t.timestamp)}</td>
                     <td className="mono addr">
                       <a
