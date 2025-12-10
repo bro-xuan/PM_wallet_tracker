@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AuthGuard } from '@/components/AuthGuard';
 
 type Trade = {
   txhash: string;
@@ -347,8 +348,9 @@ export default function Home() {
   }
 
   return (
-    <>
-      <header>
+    <AuthGuard>
+      <>
+        <header>
         <h1>Polymarket Wallet Tracker <span className="muted">· live</span></h1>
         <div className="settings">
           <label htmlFor="timezone">Time zone</label>
@@ -897,6 +899,7 @@ export default function Home() {
           </div>
         ) : null}
       </main>
-    </>
+      </>
+    </AuthGuard>
   );
 }
