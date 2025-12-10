@@ -62,4 +62,5 @@ th{ text-align:left; font-weight:600; color:#b9c6e5; position:sticky; top:0; bac
   .settings{ width:100%; justify-content:space-between }
   .settings select{ width:100% }
   .filters select, .filters input{ width:100% }
+  .trader-stats-grid{ grid-template-columns: 1fr !important }
 }

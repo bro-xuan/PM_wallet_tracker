@@ -19,6 +19,59 @@ function fmt(n: number){ return n.toFixed(2); }
 const marketUrl = (slug?: string) => slug ? `https://polymarket.com/market/${slug}` : '#';
 const walletProfileUrl = (addr: string) => `https://polymarket.com/profile/${addr}`;
 const shortAddr = (addr: string) => addr.length <= 8 ? addr : `${addr.slice(0,4)}…${addr.slice(-4)}`;
+
+function PnLChart({ data }: { data: Array<{ time: string; value: number }> }) {
+  if (!data || data.length === 0) return null;
+  
+  const width = 600;
+  const height = 200;
+  const padding = { top: 20, right: 20, bottom: 30, left: 50 };
+  const chartWidth = width - padding.left - padding.right;
+  const chartHeight = height - padding.top - padding.bottom;
+
+  const values = data.map(d => d.value);
+  const minValue = Math.min(...values, 0);
+  const maxValue = Math.max(...values, 0);
+  const range = maxValue - minValue || 1;
+
+  const xScale = (idx: number) => padding.left + (idx / (data.length - 1 || 1)) * chartWidth;
+  const yScale = (value: number) => padding.top + chartHeight - ((value - minValue) / range) * chartHeight;
+
+  const points = data.map((d, idx) => `${xScale(idx)},${yScale(d.value)}`).join(' ');
+  const zeroY = yScale(0);
+  const areaPath = `M ${padding.left},${zeroY} L ${points} L ${padding.left + chartWidth},${zeroY} Z`;
+
+  const chartId = useMemo(() => `chart-${Math.random().toString(36).substr(2, 9)}`, []);
+
+  return (
+    <div style={{marginTop:16}}>
+      <svg width={width} height={height} style={{maxWidth:'100%', height:'auto'}} viewBox={`0 0 ${width} ${height}`}>
+        <defs>
+          <linearGradient id={`lineGradient-${chartId}`} x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#a855f7" />
+            <stop offset="100%" stopColor="#3b82f6" />
+          </linearGradient>
+          <linearGradient id={`areaGradient-${chartId}`} x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="#a855f7" stopOpacity="0.3" />
+            <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.1" />
+          </linearGradient>
+        </defs>
+        <path
+          d={areaPath}
+          fill={`url(#areaGradient-${chartId})`}
+        />
+        <polyline
+          points={points}
+          fill="none"
+          stroke={`url(#lineGradient-${chartId})`}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </div>
+  );
+}
 const BASE_TIMEZONES = [
   'UTC',
   'America/New_York',
@@ -31,7 +84,7 @@ const BASE_TIMEZONES = [
 ];
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<'monitoring' | 'stats'>('monitoring');
+  const [activeTab, setActiveTab] = useState<'monitoring' | 'stats' | 'whale-alerts'>('monitoring');
   const [trades, setTrades] = useState<Trade[]>([]);
   const [wallets, setWallets] = useState<string[]>([]);
   const [addressInput, setAddressInput] = useState('');
@@ -52,6 +105,11 @@ export default function Home() {
   const [traderStats, setTraderStats] = useState<any>(null);
   const [loadingStats, setLoadingStats] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
+  const [pnlTimePeriod, setPnlTimePeriod] = useState<'d1' | 'w1' | 'm1' | 'all'>('all');
+  
+  // Whale Alerts state
+  const [telegramConnected, setTelegramConnected] = useState(false);
+  const [telegramUsername, setTelegramUsername] = useState<string | null>(null);
 
   const walletsSet = useMemo(() => new Set(wallets.map(w => w.toLowerCase())), [wallets]);
   const timeZoneOptions = useMemo(() => {
@@ -338,6 +396,22 @@ export default function Home() {
         >
           Trader Stats
         </button>
+        <button
+          type="button"
+          onClick={()=>setActiveTab('whale-alerts')}
+          style={{
+            padding:'12px 24px',
+            border:'none',
+            borderBottom:activeTab === 'whale-alerts' ? '2px solid #4b6bff' : '2px solid transparent',
+            background:'transparent',
+            color:activeTab === 'whale-alerts' ? 'var(--ink)' : 'var(--muted)',
+            cursor:'pointer',
+            fontSize:14,
+            fontWeight:activeTab === 'whale-alerts' ? 600 : 400
+          }}
+        >
+          Whale trades alerts
+        </button>
       </div>
       <main>
         {activeTab === 'monitoring' ? (
@@ -579,27 +653,30 @@ export default function Home() {
           </div>
         </section>
           </>
-        ) : (
-          <section className="card">
-            <h3>Trader Stats</h3>
-            <p className="muted">Enter a wallet address to view PnL and win rate statistics.</p>
-            
-            <div className="row" style={{marginTop:16}}>
-              <input
-                value={traderAddress}
-                onChange={e=>setTraderAddress(e.target.value)}
-                placeholder="0x..."
-                style={{ flex:1 }}
-                onKeyDown={e=>{if(e.key==='Enter') fetchTraderStats(traderAddress)}}
-              />
-              <button onClick={()=>fetchTraderStats(traderAddress)} disabled={loadingStats}>
-                {loadingStats ? 'Loading...' : 'Get Stats'}
-              </button>
-            </div>
+        ) : activeTab === 'stats' ? (
+          <div style={{maxWidth:'1200px', margin:'0 auto', padding:'0 20px'}}>
+            <section className="card">
+              <h3>Trader Stats</h3>
+              <p className="muted">Enter a wallet address to view PnL and win rate statistics.</p>
+              
+              <div className="row" style={{marginTop:16}}>
+                <input
+                  value={traderAddress}
+                  onChange={e=>setTraderAddress(e.target.value)}
+                  placeholder="0x..."
+                  style={{ flex:1 }}
+                  onKeyDown={e=>{if(e.key==='Enter') fetchTraderStats(traderAddress)}}
+                />
+                <button onClick={()=>fetchTraderStats(traderAddress)} disabled={loadingStats}>
+                  {loadingStats ? 'Loading...' : 'Get Stats'}
+                </button>
+              </div>
+            </section>
 
             {traderStats && (
-              <div style={{marginTop:24}}>
-                <section className="card" style={{padding:24}}>
+              <div style={{marginTop:24, display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, width:'100%', alignItems:'start'}}>
+                  {/* Left Card: Trader Stats */}
+                  <section className="card" style={{padding:24, height:'100%', display:'flex', flexDirection:'column'}}>
                   <div style={{display:'flex', alignItems:'center', gap:16, marginBottom:24}}>
                     <div style={{
                       width:64,
@@ -608,43 +685,109 @@ export default function Home() {
                       background:'linear-gradient(135deg, #ff6b9d 0%, #c44569 50%, #f8b500 100%)',
                       flexShrink:0
                     }} />
-                    <div style={{flex:1}}>
-                      <h2 
-                        style={{margin:0, fontSize:24, fontWeight:600, cursor:'pointer'}}
-                        title={traderAddress}
-                        onClick={()=>{navigator.clipboard.writeText(traderAddress)}}
-                      >
+                    <div style={{flex:1, display:'flex', alignItems:'center', gap:8}}>
+                      <h2 style={{margin:0, fontSize:24, fontWeight:600, flex:1}}>
                         {shortAddr(traderAddress)}
                       </h2>
-                      <p style={{margin:4, fontSize:14, color:'var(--muted)', fontFamily:'ui-monospace'}}>
-                        {traderAddress}
-                      </p>
+                      <button
+                        type="button"
+                        onClick={()=>{
+                          navigator.clipboard.writeText(traderAddress);
+                        }}
+                        style={{
+                          padding:'6px 8px',
+                          background:'transparent',
+                          border:'1px solid var(--line)',
+                          borderRadius:6,
+                          cursor:'pointer',
+                          display:'flex',
+                          alignItems:'center',
+                          justifyContent:'center'
+                        }}
+                        title="Copy address"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" stroke="var(--ink)" fill="none"/>
+                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke="var(--ink)" fill="none"/>
+                        </svg>
+                      </button>
                     </div>
                   </div>
 
                   <div style={{display:'flex', gap:24, paddingTop:24, borderTop:'1px solid var(--line)'}}>
-                    <div style={{flex:1}}>
+                    <div style={{flex:1, minWidth:0}}>
                       <div style={{fontSize:12, color:'var(--muted)', marginBottom:8}}>Positions Value</div>
-                      <div style={{fontSize:28, fontWeight:600}}>
+                      <div style={{fontSize:28, fontWeight:600, wordBreak:'break-word'}}>
                         {traderStats.positionsValueFormatted || '$0'}
                       </div>
                     </div>
                     <div style={{width:1, background:'var(--line)'}} />
-                    <div style={{flex:1}}>
+                    <div style={{flex:1, minWidth:0}}>
                       <div style={{fontSize:12, color:'var(--muted)', marginBottom:8}}>Biggest Win</div>
-                      <div style={{fontSize:28, fontWeight:600}}>
+                      <div style={{fontSize:28, fontWeight:600, wordBreak:'break-word'}}>
                         {traderStats.biggestWinFormatted || '$0'}
                       </div>
                     </div>
                     <div style={{width:1, background:'var(--line)'}} />
-                    <div style={{flex:1}}>
+                    <div style={{flex:1, minWidth:0}}>
                       <div style={{fontSize:12, color:'var(--muted)', marginBottom:8}}>Predictions</div>
-                      <div style={{fontSize:28, fontWeight:600}}>
-                        {traderStats.predictionsCount || 0}
+                      <div style={{fontSize:28, fontWeight:600, wordBreak:'break-word'}}>
+                        {traderStats.predictionsCount?.toLocaleString() || 0}
                       </div>
                     </div>
                   </div>
                 </section>
+
+                {/* Right Card: Profit/Loss */}
+                <section className="card" style={{padding:24, height:'100%', display:'flex', flexDirection:'column'}}>
+                  <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16}}>
+                    <div style={{display:'flex', alignItems:'center', gap:8}}>
+                      <span style={{color:'var(--good)', fontSize:20}}>▲</span>
+                      <h3 style={{margin:0, fontSize:18}}>Profit/Loss</h3>
+                    </div>
+                  </div>
+
+                  <div style={{marginBottom:24}}>
+                    <div style={{fontSize:48, fontWeight:700, lineHeight:1.2, marginBottom:4}}>
+                      {traderStats.allTimePnlFormatted || '$0.00'}
+                    </div>
+                    <div style={{fontSize:12, color:'var(--muted)'}}>All-Time</div>
+                  </div>
+
+                  {/* Time Period Tabs */}
+                  <div style={{display:'flex', gap:8, marginBottom:16}}>
+                    {(['d1', 'w1', 'm1', 'all'] as const).map((period) => (
+                      <button
+                        key={period}
+                        type="button"
+                        onClick={()=>setPnlTimePeriod(period)}
+                        style={{
+                          padding:'6px 12px',
+                          borderRadius:6,
+                          border:'1px solid var(--line)',
+                          background:pnlTimePeriod === period ? '#1e3a8a' : 'transparent',
+                          color:pnlTimePeriod === period ? '#fff' : 'var(--ink)',
+                          cursor:'pointer',
+                          fontSize:12,
+                          fontWeight:pnlTimePeriod === period ? 600 : 400
+                        }}
+                      >
+                        {period === 'd1' ? '1D' : period === 'w1' ? '1W' : period === 'm1' ? '1M' : 'ALL'}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Chart */}
+                  <div style={{flex:1, display:'flex', alignItems:'center', justifyContent:'center', minHeight:200}}>
+                    {traderStats.pnlChartData && traderStats.pnlChartData[pnlTimePeriod] && traderStats.pnlChartData[pnlTimePeriod].length > 0 ? (
+                      <PnLChart data={traderStats.pnlChartData[pnlTimePeriod]} />
+                    ) : (
+                      <div style={{color:'var(--muted)'}}>
+                        No data available for this period
+                      </div>
+                    )}
+                  </div>
+                  </section>
               </div>
             )}
 
@@ -659,8 +802,100 @@ export default function Home() {
                 Error: {statsError}
               </div>
             )}
-          </section>
-        )}
+          </div>
+        ) : activeTab === 'whale-alerts' ? (
+          <div style={{maxWidth:'600px', margin:'0 auto', padding:'40px 20px'}}>
+            <section className="card" style={{padding:32}}>
+              <h3 style={{marginTop:0, marginBottom:24}}>Whale Trades Alerts</h3>
+              <p className="muted" style={{marginBottom:32}}>
+                Connect your Telegram account to receive notifications for large trades.
+              </p>
+              
+              {!telegramConnected ? (
+                <div style={{display:'flex', flexDirection:'column', gap:16}}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // TODO: Implement Telegram connection
+                      console.log('Connect Telegram clicked');
+                    }}
+                    style={{
+                      padding:'12px 24px',
+                      background:'#0088cc',
+                      color:'#fff',
+                      border:'none',
+                      borderRadius:8,
+                      cursor:'pointer',
+                      fontSize:16,
+                      fontWeight:600
+                    }}
+                  >
+                    Connect Telegram
+                  </button>
+                </div>
+              ) : (
+                <div style={{display:'flex', flexDirection:'column', gap:16}}>
+                  <div style={{
+                    padding:16,
+                    background:'var(--bg)',
+                    borderRadius:8,
+                    border:'1px solid var(--line)',
+                    display:'flex',
+                    alignItems:'center',
+                    justifyContent:'space-between'
+                  }}>
+                    <div>
+                      <div style={{fontSize:14, color:'var(--muted)', marginBottom:4}}>Connected to</div>
+                      <div style={{fontSize:16, fontWeight:600}}>
+                        @{telegramUsername || 'username'}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // TODO: Implement test notification
+                      console.log('Test notification clicked');
+                    }}
+                    style={{
+                      padding:'12px 24px',
+                      background:'transparent',
+                      color:'var(--ink)',
+                      border:'1px solid var(--line)',
+                      borderRadius:8,
+                      cursor:'pointer',
+                      fontSize:16,
+                      fontWeight:500
+                    }}
+                  >
+                    Test notification
+                  </button>
+                  
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // TODO: Implement test alert
+                      console.log('Send test alert clicked');
+                    }}
+                    style={{
+                      padding:'12px 24px',
+                      background:'transparent',
+                      color:'var(--ink)',
+                      border:'1px solid var(--line)',
+                      borderRadius:8,
+                      cursor:'pointer',
+                      fontSize:16,
+                      fontWeight:500
+                    }}
+                  >
+                    Send test alert
+                  </button>
+                </div>
+              )}
+            </section>
+          </div>
+        ) : null}
       </main>
     </>
   );
