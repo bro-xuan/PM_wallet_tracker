@@ -6,9 +6,13 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const limit = Math.min(parseInt(url.searchParams.get('limit') || '200', 10), 1000);
+  const offset = Math.max(parseInt(url.searchParams.get('offset') || '0', 10), 0);
   const min = Number(url.searchParams.get('minNotional') || '0');
 
-  const rows = stmt.listRecent.all(limit).map((r: any) => ({
+  const rows = (offset > 0 
+    ? stmt.listRecentPaginated.all(limit, offset)
+    : stmt.listRecent.all(limit)
+  ).map((r: any) => ({
     txhash: r.txhash,
     wallet: r.proxyWallet,
     side: r.side,
@@ -22,7 +26,14 @@ export async function GET(req: Request) {
   }));
 
   const filtered = min > 0 ? rows.filter(r => r.notional >= min) : rows;
-  return new Response(JSON.stringify({ trades: filtered }), {
+  const total = (stmt.countTrades.get() as any).count;
+  
+  return new Response(JSON.stringify({ 
+    trades: filtered,
+    total,
+    limit,
+    offset 
+  }), {
     headers: { 'content-type': 'application/json' }
   });
 }

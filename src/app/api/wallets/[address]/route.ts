@@ -15,3 +15,4 @@ export async function DELETE(req: Request) {
   const invalid = !isAddress(a);
   return Response.json({ removed: a, invalidFormat: invalid });
 }
+

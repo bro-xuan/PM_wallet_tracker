@@ -31,6 +31,7 @@ const BASE_TIMEZONES = [
 ];
 
 export default function Home() {
+  const [activeTab, setActiveTab] = useState<'monitoring' | 'stats'>('monitoring');
   const [trades, setTrades] = useState<Trade[]>([]);
   const [wallets, setWallets] = useState<string[]>([]);
   const [addressInput, setAddressInput] = useState('');
@@ -40,7 +41,17 @@ export default function Home() {
   const [priceFilter, setPriceFilter] = useState('');
   const [timeZone, setTimeZone] = useState('UTC');
   const [labels, setLabels] = useState<Record<string, string>>({});
+  const [currentPage, setCurrentPage] = useState(0);
+  const [pageSize, setPageSize] = useState(200);
+  const [totalTrades, setTotalTrades] = useState(0);
   const walletsRef = useRef<Set<string>>(new Set());
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  
+  // Trader Stats state
+  const [traderAddress, setTraderAddress] = useState('');
+  const [traderStats, setTraderStats] = useState<any>(null);
+  const [loadingStats, setLoadingStats] = useState(false);
+  const [statsError, setStatsError] = useState<string | null>(null);
 
   const walletsSet = useMemo(() => new Set(wallets.map(w => w.toLowerCase())), [wallets]);
   const timeZoneOptions = useMemo(() => {
@@ -122,26 +133,41 @@ export default function Home() {
   }, [tsFormatter]);
 
   const syncWalletsAndTrades = useCallback(async () => {
+    const offset = currentPage * pageSize;
     const [t, w] = await Promise.all([
-      fetch('/api/trades/recent?limit=200', { cache: 'no-store' }).then(r=>r.json()),
+      fetch(`/api/trades/recent?limit=${pageSize}&offset=${offset}`, { cache: 'no-store' }).then(r=>r.json()),
       fetch('/api/wallets', { cache: 'no-store' }).then(r=>r.json())
     ]);
     const addresses: string[] = w.addresses || [];
     const allowed = new Set(addresses.map(a => a.toLowerCase()));
     setWallets(addresses);
+    setTotalTrades(t.total || 0);
     setTrades(Array.isArray(t.trades)
       ? t.trades.filter((trade: Trade) => allowed.has(trade.wallet.toLowerCase()))
       : []
     );
-  }, []);
+  }, [currentPage, pageSize]);
 
   // initial data
   useEffect(() => {
     syncWalletsAndTrades();
   }, [syncWalletsAndTrades]);
 
-  // live stream
+  // scroll to top when page changes
   useEffect(() => {
+    if (tableContainerRef.current) {
+      tableContainerRef.current.scrollTop = 0;
+    }
+  }, [currentPage]);
+
+  // reset to page 0 when page size changes
+  useEffect(() => {
+    setCurrentPage(0);
+  }, [pageSize]);
+
+  // live stream (only on first page)
+  useEffect(() => {
+    if (currentPage !== 0) return; // Disable live stream when viewing older pages
     const es = new EventSource('/api/stream');
     const onTrade = (ev: MessageEvent) => {
       const t = JSON.parse(ev.data) as Trade;
@@ -153,7 +179,7 @@ export default function Home() {
       es.removeEventListener('trade', onTrade);
       es.close();
     };
-  }, []);
+  }, [currentPage]);
 
   async function addWallets() {
     const addrs = addressInput.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
@@ -240,6 +266,28 @@ export default function Home() {
     });
   }
 
+  async function fetchTraderStats(addr: string) {
+    if (!addr || addr.trim().length === 0) return;
+    setLoadingStats(true);
+    setStatsError(null);
+    try {
+      const resp = await fetch(`/api/trader/stats?address=${encodeURIComponent(addr)}`, { cache: 'no-store' });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setStatsError(data.error || 'Failed to fetch trader stats');
+        setTraderStats(null);
+      } else {
+        setTraderStats(data);
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch trader stats', err);
+      setStatsError(err.message || 'Failed to fetch trader stats');
+      setTraderStats(null);
+    } finally {
+      setLoadingStats(false);
+    }
+  }
+
   return (
     <>
       <header>
@@ -257,8 +305,44 @@ export default function Home() {
           </select>
         </div>
       </header>
+      <div style={{padding:'0 20px', borderBottom:'1px solid var(--line)', display:'flex', gap:0}}>
+        <button
+          type="button"
+          onClick={()=>setActiveTab('monitoring')}
+          style={{
+            padding:'12px 24px',
+            border:'none',
+            borderBottom:activeTab === 'monitoring' ? '2px solid #4b6bff' : '2px solid transparent',
+            background:'transparent',
+            color:activeTab === 'monitoring' ? 'var(--ink)' : 'var(--muted)',
+            cursor:'pointer',
+            fontSize:14,
+            fontWeight:activeTab === 'monitoring' ? 600 : 400
+          }}
+        >
+          Live Monitoring
+        </button>
+        <button
+          type="button"
+          onClick={()=>setActiveTab('stats')}
+          style={{
+            padding:'12px 24px',
+            border:'none',
+            borderBottom:activeTab === 'stats' ? '2px solid #4b6bff' : '2px solid transparent',
+            background:'transparent',
+            color:activeTab === 'stats' ? 'var(--ink)' : 'var(--muted)',
+            cursor:'pointer',
+            fontSize:14,
+            fontWeight:activeTab === 'stats' ? 600 : 400
+          }}
+        >
+          Trader Stats
+        </button>
+      </div>
       <main>
-        <section className="card">
+        {activeTab === 'monitoring' ? (
+          <>
+        <section className="card" style={{display:'flex', flexDirection:'column', height:'100%'}}>
           <h3>Watch wallets</h3>
           <p className="muted">Add 0x addresses (proxy wallets). Upload a .txt/.csv or paste below.</p>
 
@@ -278,7 +362,7 @@ export default function Home() {
           </div>
 
           <h4 style={{marginTop:18}}>Current wallets</h4>
-          <ul style={{listStyle:'none', paddingLeft:0, margin:0, maxHeight:'400px', overflowY:'auto'}}>
+          <ul style={{listStyle:'none', paddingLeft:0, margin:0, flex:1, overflowY:'auto', minHeight:0}}>
             {wallets.map(a => (
               <li key={a} className="row">
                 <div style={{flex:1}}>
@@ -339,7 +423,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div style={{overflow:'auto', maxHeight:'calc(100vh - 260px)', marginTop:12}}>
+          <div ref={tableContainerRef} style={{overflow:'auto', height:'60vh', minHeight:'400px', marginTop:12}}>
             <table>
               <thead>
                 <tr>
@@ -381,7 +465,202 @@ export default function Home() {
               </tbody>
             </table>
           </div>
+
+          <div style={{display:'flex', justifyContent:'flex-end', alignItems:'center', gap:12, marginTop:16, flexWrap:'wrap'}}>
+            <span style={{fontSize:14, color:'var(--ink)'}}>
+              Results: {(currentPage * pageSize) + 1} - {Math.min((currentPage + 1) * pageSize, totalTrades)} of {totalTrades}
+            </span>
+            <div style={{display:'flex', gap:4, alignItems:'center'}}>
+              {(() => {
+                const totalPages = Math.ceil(totalTrades / pageSize);
+                const current = currentPage + 1;
+                const pages: (number | string)[] = [];
+                
+                if (totalPages <= 7) {
+                  for (let i = 1; i <= totalPages; i++) pages.push(i);
+                } else {
+                  pages.push(1);
+                  if (current > 3) pages.push('...');
+                  for (let i = Math.max(2, current - 1); i <= Math.min(totalPages - 1, current + 1); i++) {
+                    pages.push(i);
+                  }
+                  if (current < totalPages - 2) pages.push('...');
+                  pages.push(totalPages);
+                }
+                
+                return (
+                  <>
+                    <button
+                      type="button"
+                      onClick={()=>setCurrentPage(prev=>Math.max(0, prev-1))}
+                      disabled={currentPage === 0}
+                      style={{
+                        padding:'6px 10px',
+                        minWidth:36,
+                        height:36,
+                        borderRadius:6,
+                        border:'1px solid #2a375d',
+                        background:currentPage === 0 ? '#0e152a' : '#152042',
+                        color:'var(--ink)',
+                        cursor:currentPage === 0 ? 'not-allowed' : 'pointer',
+                        opacity:currentPage === 0 ? 0.5 : 1
+                      }}
+                    >
+                      &lt;
+                    </button>
+                    {pages.map((p, idx) => {
+                      if (p === '...') {
+                        return (
+                          <span key={`ellipsis-${idx}`} style={{padding:'0 4px', color:'var(--muted)'}}>...</span>
+                        );
+                      }
+                      const pageNum = p as number;
+                      const isActive = pageNum === current;
+                      return (
+                        <button
+                          key={pageNum}
+                          type="button"
+                          onClick={()=>setCurrentPage(pageNum - 1)}
+                          style={{
+                            padding:'6px 10px',
+                            minWidth:36,
+                            height:36,
+                            borderRadius:6,
+                            border:'1px solid #2a375d',
+                            background:isActive ? '#1e3a8a' : '#152042',
+                            color:isActive ? '#fff' : 'var(--ink)',
+                            cursor:'pointer'
+                          }}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={()=>setCurrentPage(prev=>Math.min(Math.ceil(totalTrades / pageSize) - 1, prev+1))}
+                      disabled={(currentPage + 1) * pageSize >= totalTrades}
+                      style={{
+                        padding:'6px 10px',
+                        minWidth:36,
+                        height:36,
+                        borderRadius:6,
+                        border:'1px solid #2a375d',
+                        background:(currentPage + 1) * pageSize >= totalTrades ? '#0e152a' : '#152042',
+                        color:'var(--ink)',
+                        cursor:(currentPage + 1) * pageSize >= totalTrades ? 'not-allowed' : 'pointer',
+                        opacity:(currentPage + 1) * pageSize >= totalTrades ? 0.5 : 1
+                      }}
+                    >
+                      &gt;
+                    </button>
+                  </>
+                );
+              })()}
+              <select
+                value={pageSize}
+                onChange={e=>setPageSize(Number(e.target.value))}
+                style={{
+                  padding:'6px 10px',
+                  height:36,
+                  borderRadius:6,
+                  border:'1px solid #2a375d',
+                  background:'#152042',
+                  color:'var(--ink)',
+                  cursor:'pointer'
+                }}
+              >
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={200}>200</option>
+                <option value={500}>500</option>
+              </select>
+            </div>
+          </div>
         </section>
+          </>
+        ) : (
+          <section className="card">
+            <h3>Trader Stats</h3>
+            <p className="muted">Enter a wallet address to view PnL and win rate statistics.</p>
+            
+            <div className="row" style={{marginTop:16}}>
+              <input
+                value={traderAddress}
+                onChange={e=>setTraderAddress(e.target.value)}
+                placeholder="0x..."
+                style={{ flex:1 }}
+                onKeyDown={e=>{if(e.key==='Enter') fetchTraderStats(traderAddress)}}
+              />
+              <button onClick={()=>fetchTraderStats(traderAddress)} disabled={loadingStats}>
+                {loadingStats ? 'Loading...' : 'Get Stats'}
+              </button>
+            </div>
+
+            {traderStats && (
+              <div style={{marginTop:24}}>
+                <section className="card" style={{padding:24}}>
+                  <div style={{display:'flex', alignItems:'center', gap:16, marginBottom:24}}>
+                    <div style={{
+                      width:64,
+                      height:64,
+                      borderRadius:'50%',
+                      background:'linear-gradient(135deg, #ff6b9d 0%, #c44569 50%, #f8b500 100%)',
+                      flexShrink:0
+                    }} />
+                    <div style={{flex:1}}>
+                      <h2 
+                        style={{margin:0, fontSize:24, fontWeight:600, cursor:'pointer'}}
+                        title={traderAddress}
+                        onClick={()=>{navigator.clipboard.writeText(traderAddress)}}
+                      >
+                        {shortAddr(traderAddress)}
+                      </h2>
+                      <p style={{margin:4, fontSize:14, color:'var(--muted)', fontFamily:'ui-monospace'}}>
+                        {traderAddress}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div style={{display:'flex', gap:24, paddingTop:24, borderTop:'1px solid var(--line)'}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:12, color:'var(--muted)', marginBottom:8}}>Positions Value</div>
+                      <div style={{fontSize:28, fontWeight:600}}>
+                        {traderStats.positionsValueFormatted || '$0'}
+                      </div>
+                    </div>
+                    <div style={{width:1, background:'var(--line)'}} />
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:12, color:'var(--muted)', marginBottom:8}}>Biggest Win</div>
+                      <div style={{fontSize:28, fontWeight:600}}>
+                        {traderStats.biggestWinFormatted || '$0'}
+                      </div>
+                    </div>
+                    <div style={{width:1, background:'var(--line)'}} />
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:12, color:'var(--muted)', marginBottom:8}}>Predictions</div>
+                      <div style={{fontSize:28, fontWeight:600}}>
+                        {traderStats.predictionsCount || 0}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {loadingStats && (
+              <div style={{marginTop:24, padding:16, textAlign:'center', color:'var(--muted)'}}>
+                Loading trader stats...
+              </div>
+            )}
+
+            {statsError && (
+              <div style={{marginTop:24, padding:16, background:'var(--bg)', borderRadius:8, textAlign:'center', color:'var(--bad)'}}>
+                Error: {statsError}
+              </div>
+            )}
+          </section>
+        )}
       </main>
     </>
   );

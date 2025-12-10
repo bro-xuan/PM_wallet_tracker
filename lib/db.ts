@@ -55,4 +55,8 @@ export const stmt = {
   listRecent: db.prepare(`
     SELECT * FROM trades ORDER BY timestamp DESC LIMIT ?
   `),
+  listRecentPaginated: db.prepare(`
+    SELECT * FROM trades ORDER BY timestamp DESC LIMIT ? OFFSET ?
+  `),
+  countTrades: db.prepare('SELECT COUNT(*) as count FROM trades'),
 };
