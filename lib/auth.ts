@@ -2,6 +2,8 @@ import CredentialsProvider from 'next-auth/providers/credentials';
 import { MongoDBAdapter } from '@auth/mongodb-adapter';
 import clientPromise from './mongodb';
 import bcrypt from 'bcryptjs';
+import NextAuth from 'next-auth';
+import type { NextAuthConfig } from 'next-auth';
 
 export const authOptions = {
   adapter: MongoDBAdapter(clientPromise),
@@ -83,5 +85,6 @@ export const authOptions = {
     },
   },
   secret: process.env.NEXTAUTH_SECRET,
-};
+} satisfies NextAuthConfig;
 
+export const { handlers, auth } = NextAuth(authOptions);

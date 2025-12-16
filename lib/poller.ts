@@ -1,18 +1,31 @@
 import db, { stmt } from './db';
 import { publish } from './bus';
 import { fetchTradesForUser, DataTrade } from './polymarket';
+import clientPromise from './mongodb';
 
 const globalAny = globalThis as any;
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 1000);
 
-function wallets(): string[] {
-  return stmt.listWallets.all().map((r: any) => r.address as string);
+async function wallets(): Promise<string[]> {
+  try {
+    const client = await clientPromise;
+    const db_mongo = client.db(process.env.MONGODB_DB_NAME || 'pm-wallet-tracker');
+    const walletsCollection = db_mongo.collection('wallets');
+    const allWallets = await walletsCollection.find(
+      { isActive: true },
+      { projection: { address: 1, _id: 0 } }
+    ).toArray();
+    return allWallets.map((w: any) => w.address);
+  } catch (error) {
+    console.error('[poller] Error fetching wallets from MongoDB:', error);
+    return [];
+  }
 }
 
 let rotatingIndex = 0;
 
 async function processNextWallet() {
-  const ws = wallets();
+  const ws = await wallets();
   if (ws.length === 0) return;
   const idx = rotatingIndex % ws.length;
   rotatingIndex++;

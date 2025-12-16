@@ -152,20 +152,42 @@ export default function Home() {
     } catch {}
   }, []);
 
+  // Migrate labels from localStorage to MongoDB on first load
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || !session) return;
+    
+    // Check if we've already migrated labels
+    const migrated = sessionStorage.getItem('labelsMigrated');
+    if (migrated) return;
+    
     try {
       const raw = localStorage.getItem('walletLabels');
-      if (raw) setLabels(JSON.parse(raw));
-    } catch {}
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      localStorage.setItem('walletLabels', JSON.stringify(labels));
-    } catch {}
-  }, [labels]);
+      if (raw) {
+        const localLabels = JSON.parse(raw);
+        // Migrate each label to MongoDB
+        Object.entries(localLabels).forEach(async ([addr, label]) => {
+          if (typeof label === 'string' && label.trim()) {
+            try {
+              await fetch(`/api/wallets/${encodeURIComponent(addr)}/label`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ label: label.trim() }),
+                cache: 'no-store',
+              });
+            } catch (e) {
+              // Ignore errors during migration
+            }
+          }
+        });
+        // Mark as migrated
+        sessionStorage.setItem('labelsMigrated', 'true');
+        // Optionally clear localStorage after migration
+        // localStorage.removeItem('walletLabels');
+      }
+    } catch (e) {
+      // Ignore errors
+    }
+  }, [session]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -215,6 +237,20 @@ export default function Home() {
     const addresses: string[] = w.addresses || [];
     const allowed = new Set(addresses.map(a => a.toLowerCase()));
     setWallets(addresses);
+    
+    // Sync labels from MongoDB
+    if (w.labels && typeof w.labels === 'object') {
+      setLabels(prev => {
+        const newLabels = { ...prev };
+        Object.entries(w.labels).forEach(([addr, label]) => {
+          if (typeof label === 'string' && label.trim()) {
+            newLabels[addr.toLowerCase()] = label.trim();
+          }
+        });
+        return newLabels;
+      });
+    }
+    
     setTotalTrades(t.total || 0);
     setTrades(Array.isArray(t.trades)
       ? t.trades.filter((trade: Trade) => allowed.has(trade.wallet.toLowerCase()))
@@ -222,10 +258,18 @@ export default function Home() {
     );
   }, [currentPage, pageSize]);
 
-  // initial data
+  // initial data - only fetch when authenticated
   useEffect(() => {
-    syncWalletsAndTrades();
-  }, [syncWalletsAndTrades]);
+    if (sessionStatus === 'loading') return; // Wait for session to load
+    if (session) {
+      syncWalletsAndTrades();
+    } else {
+      // Clear data when not authenticated
+      setWallets([]);
+      setTrades([]);
+      setTotalTrades(0);
+    }
+  }, [session, sessionStatus, syncWalletsAndTrades]);
 
   // scroll to top when page changes
   useEffect(() => {
@@ -239,9 +283,10 @@ export default function Home() {
     setCurrentPage(0);
   }, [pageSize]);
 
-  // live stream (only on first page)
+  // live stream (only on first page and when authenticated)
   useEffect(() => {
     if (currentPage !== 0) return; // Disable live stream when viewing older pages
+    if (!session) return; // Only stream when authenticated
     const es = new EventSource('/api/stream');
     const onTrade = (ev: MessageEvent) => {
       const t = JSON.parse(ev.data) as Trade;
@@ -253,7 +298,7 @@ export default function Home() {
       es.removeEventListener('trade', onTrade);
       es.close();
     };
-  }, [currentPage]);
+  }, [currentPage, session]);
 
   async function addWallets() {
     const addrs = addressInput.split(/[\s,;]+/).map(s=>s.trim()).filter(Boolean);
@@ -323,21 +368,40 @@ export default function Home() {
     });
   }, [trades, walletFilter, notionalPreset, sideFilter, priceFilter, walletsSet, labels]);
 
-  function editLabel(addr: string) {
+  async function editLabel(addr: string) {
     const current = labels[addr.toLowerCase()] || '';
     const next = window.prompt('Label for wallet', current);
     if (next === null) return;
     const trimmed = next.trim();
-    setLabels(prev => {
-      const copy = { ...prev };
-      const key = addr.toLowerCase();
-      if (!trimmed) {
-        delete copy[key];
-      } else {
-        copy[key] = trimmed;
+    
+    try {
+      const resp = await fetch(`/api/wallets/${encodeURIComponent(addr)}/label`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: trimmed }),
+        cache: 'no-store',
+      });
+      
+      if (!resp.ok) {
+        const data = await resp.json();
+        throw new Error(data.error || 'Failed to update label');
       }
-      return copy;
-    });
+      
+      // Update local state
+      setLabels(prev => {
+        const copy = { ...prev };
+        const key = addr.toLowerCase();
+        if (!trimmed) {
+          delete copy[key];
+        } else {
+          copy[key] = trimmed;
+        }
+        return copy;
+      });
+    } catch (error: any) {
+      console.error('Failed to update label:', error);
+      alert(error.message || 'Failed to update label');
+    }
   }
 
   async function handleRegister() {
@@ -940,7 +1004,36 @@ export default function Home() {
         </button>
       </div>
       <main>
-        {activeTab === 'monitoring' ? (
+        {sessionStatus === 'loading' ? (
+          <div style={{gridColumn:'1/-1', padding:40, textAlign:'center', color:'var(--muted)'}}>
+            Loading...
+          </div>
+        ) : !session ? (
+          <div style={{gridColumn:'1/-1', padding:40, textAlign:'center'}}>
+            <h2 style={{marginBottom:16}}>Please log in to view your monitored wallets</h2>
+            <p className="muted" style={{marginBottom:24}}>Sign in to start tracking trades from your monitored wallets</p>
+            <button
+              type="button"
+              onClick={() => {
+                setShowAuthModal(true);
+                setAuthMode('login');
+                setAuthError('');
+              }}
+              style={{
+                padding:'12px 24px',
+                background:'#4b6bff',
+                border:'none',
+                borderRadius:8,
+                color:'#fff',
+                cursor:'pointer',
+                fontSize:16,
+                fontWeight:600
+              }}
+            >
+              Login
+            </button>
+          </div>
+        ) : activeTab === 'monitoring' ? (
           <>
         <section className="card" style={{display:'flex', flexDirection:'column', height:'100%'}}>
           <h3>Watch wallets</h3>
@@ -1179,7 +1272,7 @@ export default function Home() {
           </div>
         </section>
           </>
-        ) : activeTab === 'stats' ? (
+        ) : !session ? null : activeTab === 'stats' ? (
           <div style={{maxWidth:'1200px', margin:'0 auto', padding:'0 20px'}}>
             <section className="card">
               <h3>Trader Stats</h3>
@@ -1329,7 +1422,7 @@ export default function Home() {
               </div>
             )}
           </div>
-        ) : activeTab === 'whale-alerts' ? (
+        ) : !session ? null : activeTab === 'whale-alerts' ? (
           <div style={{maxWidth:'600px', margin:'0 auto', padding:'40px 20px'}}>
             <section className="card" style={{padding:32}}>
               <h3 style={{marginTop:0, marginBottom:24}}>Whale Trades Alerts</h3>
