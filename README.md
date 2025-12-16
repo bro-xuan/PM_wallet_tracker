@@ -13,42 +13,19 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-### Prerequisites
+First, run the development server:
 
-- Node.js 18+ 
-- MongoDB (local or cloud instance)
-
-### Setup
-
-1. Install dependencies:
-```bash
-npm install
-```
-
-2. Set up environment variables:
-Create a `.env.local` file in the root directory:
-```env
-MONGODB_URI=mongodb://localhost:27017/pm-wallet-tracker
-NEXTAUTH_URL=http://localhost:3000
-NEXTAUTH_SECRET=your-secret-key-here-change-in-production
-```
-
-3. Start MongoDB (if running locally):
-```bash
-# Using Docker
-docker run -d -p 27017:27017 --name mongodb mongo:latest
-
-# Or use your local MongoDB installation
-```
-
-4. Run the development server:
 ```bash
 npm run dev
+# or
+yarn dev
+# or
+pnpm dev
+# or
+bun dev
 ```
 
-5. Open [http://localhost:3000](http://localhost:3000) with your browser.
-
-You'll be redirected to the sign-in page. You can create an account by entering an email and password.
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 

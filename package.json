@@ -12,6 +12,7 @@
     "@auth/mongodb-adapter": "^3.11.1",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.4.1",
+    "mongodb": "^7.0.0",
     "mongoose": "^9.0.1",
     "next": "16.0.3",
     "next-auth": "^5.0.0-beta.30",

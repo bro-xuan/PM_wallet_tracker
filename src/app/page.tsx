@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AuthGuard } from '@/components/AuthGuard';
+import { useSession, signIn, signOut } from 'next-auth/react';
 
 type Trade = {
   txhash: string;
@@ -111,6 +111,16 @@ export default function Home() {
   // Whale Alerts state
   const [telegramConnected, setTelegramConnected] = useState(false);
   const [telegramUsername, setTelegramUsername] = useState<string | null>(null);
+  
+  // Auth state
+  const { data: session, status: sessionStatus } = useSession();
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
 
   const walletsSet = useMemo(() => new Set(wallets.map(w => w.toLowerCase())), [wallets]);
   const timeZoneOptions = useMemo(() => {
@@ -325,6 +335,79 @@ export default function Home() {
     });
   }
 
+  async function handleRegister() {
+    setAuthError('');
+    if (!authEmail || !authPassword) {
+      setAuthError('Email and password required');
+      return;
+    }
+    if (authPassword !== authConfirmPassword) {
+      setAuthError('Passwords do not match');
+      return;
+    }
+    if (authPassword.length < 6) {
+      setAuthError('Password must be at least 6 characters');
+      return;
+    }
+    
+    setAuthLoading(true);
+    try {
+      const resp = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, password: authPassword }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setAuthError(data.error || 'Registration failed');
+        return;
+      }
+      // After successful registration, automatically log in
+      await handleLogin();
+    } catch (error: any) {
+      setAuthError(error.message || 'Registration failed');
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleLogin() {
+    setAuthError('');
+    if (!authEmail || !authPassword) {
+      setAuthError('Email and password required');
+      return;
+    }
+    
+    setAuthLoading(true);
+    try {
+      const result = await signIn('credentials', {
+        email: authEmail,
+        password: authPassword,
+        redirect: false,
+      });
+      
+      if (result?.error) {
+        setAuthError('Invalid email or password');
+      } else {
+        setShowAuthModal(false);
+        setAuthEmail('');
+        setAuthPassword('');
+        setAuthConfirmPassword('');
+        setAuthError('');
+      }
+    } catch (error: any) {
+      setAuthError(error.message || 'Login failed');
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleLogout() {
+    await signOut({ redirect: false });
+    setWallets([]);
+    setTrades([]);
+  }
+
   async function fetchTraderStats(addr: string) {
     if (!addr || addr.trim().length === 0) return;
     setLoadingStats(true);
@@ -348,23 +431,262 @@ export default function Home() {
   }
 
   return (
-    <AuthGuard>
-      <>
-        <header>
+    <>
+      <header>
         <h1>Polymarket Wallet Tracker <span className="muted">· live</span></h1>
-        <div className="settings">
-          <label htmlFor="timezone">Time zone</label>
-          <select
-            id="timezone"
-            value={timeZone}
-            onChange={e => setTimeZone(e.target.value)}
-          >
-            {timeZoneOptions.map(tz => (
-              <option key={tz} value={tz}>{tz}</option>
-            ))}
-          </select>
+        <div style={{display:'flex', alignItems:'center', gap:16}}>
+          {sessionStatus === 'loading' ? (
+            <div style={{color:'var(--muted)'}}>Loading...</div>
+          ) : session ? (
+            <div style={{display:'flex', alignItems:'center', gap:12}}>
+              <span style={{color:'var(--muted)', fontSize:14}}>{session.user?.email}</span>
+              <button
+                type="button"
+                onClick={handleLogout}
+                style={{
+                  padding:'8px 16px',
+                  background:'transparent',
+                  border:'1px solid var(--line)',
+                  borderRadius:8,
+                  color:'var(--ink)',
+                  cursor:'pointer',
+                  fontSize:14
+                }}
+              >
+                Logout
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setShowAuthModal(true);
+                setAuthMode('login');
+                setAuthError('');
+              }}
+              style={{
+                padding:'8px 16px',
+                background:'#4b6bff',
+                border:'none',
+                borderRadius:8,
+                color:'#fff',
+                cursor:'pointer',
+                fontSize:14,
+                fontWeight:500
+              }}
+            >
+              Login
+            </button>
+          )}
+          <div className="settings">
+            <label htmlFor="timezone">Time zone</label>
+            <select
+              id="timezone"
+              value={timeZone}
+              onChange={e => setTimeZone(e.target.value)}
+            >
+              {timeZoneOptions.map(tz => (
+                <option key={tz} value={tz}>{tz}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </header>
+      
+      {/* Auth Modal */}
+      {showAuthModal && (
+        <div
+          style={{
+            position:'fixed',
+            top:0,
+            left:0,
+            right:0,
+            bottom:0,
+            background:'rgba(0,0,0,0.7)',
+            display:'flex',
+            alignItems:'center',
+            justifyContent:'center',
+            zIndex:1000,
+            padding:20
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setShowAuthModal(false);
+              setAuthError('');
+            }
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              width:'100%',
+              maxWidth:400,
+              padding:32
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{display:'flex', gap:16, marginBottom:24, borderBottom:'1px solid var(--line)', paddingBottom:16}}>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode('login');
+                  setAuthError('');
+                }}
+                style={{
+                  flex:1,
+                  padding:'8px 16px',
+                  background:authMode === 'login' ? '#4b6bff' : 'transparent',
+                  border:'1px solid var(--line)',
+                  borderRadius:8,
+                  color:authMode === 'login' ? '#fff' : 'var(--ink)',
+                  cursor:'pointer',
+                  fontSize:14,
+                  fontWeight:authMode === 'login' ? 600 : 400
+                }}
+              >
+                Login
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode('register');
+                  setAuthError('');
+                }}
+                style={{
+                  flex:1,
+                  padding:'8px 16px',
+                  background:authMode === 'register' ? '#4b6bff' : 'transparent',
+                  border:'1px solid var(--line)',
+                  borderRadius:8,
+                  color:authMode === 'register' ? '#fff' : 'var(--ink)',
+                  cursor:'pointer',
+                  fontSize:14,
+                  fontWeight:authMode === 'register' ? 600 : 400
+                }}
+              >
+                Register
+              </button>
+            </div>
+
+            {authError && (
+              <div style={{
+                padding:12,
+                background:'var(--bg)',
+                border:'1px solid var(--bad)',
+                borderRadius:8,
+                color:'var(--bad)',
+                marginBottom:16,
+                fontSize:14
+              }}>
+                {authError}
+              </div>
+            )}
+
+            <div style={{display:'flex', flexDirection:'column', gap:16}}>
+              <div>
+                <label style={{display:'block', marginBottom:8, fontSize:14, color:'var(--muted)'}}>
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="your@email.com"
+                  style={{
+                    width:'100%',
+                    padding:'10px 12px',
+                    background:'var(--bg)',
+                    border:'1px solid var(--line)',
+                    borderRadius:8,
+                    color:'var(--ink)',
+                    fontSize:14
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      if (authMode === 'login') handleLogin();
+                      else handleRegister();
+                    }
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{display:'block', marginBottom:8, fontSize:14, color:'var(--muted)'}}>
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="••••••••"
+                  style={{
+                    width:'100%',
+                    padding:'10px 12px',
+                    background:'var(--bg)',
+                    border:'1px solid var(--line)',
+                    borderRadius:8,
+                    color:'var(--ink)',
+                    fontSize:14
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      if (authMode === 'login') handleLogin();
+                      else handleRegister();
+                    }
+                  }}
+                />
+              </div>
+
+              {authMode === 'register' && (
+                <div>
+                  <label style={{display:'block', marginBottom:8, fontSize:14, color:'var(--muted)'}}>
+                    Confirm Password
+                  </label>
+                  <input
+                    type="password"
+                    value={authConfirmPassword}
+                    onChange={(e) => setAuthConfirmPassword(e.target.value)}
+                    placeholder="••••••••"
+                    style={{
+                      width:'100%',
+                      padding:'10px 12px',
+                      background:'var(--bg)',
+                      border:'1px solid var(--line)',
+                      borderRadius:8,
+                      color:'var(--ink)',
+                      fontSize:14
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleRegister();
+                    }}
+                  />
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={authMode === 'login' ? handleLogin : handleRegister}
+                disabled={authLoading}
+                style={{
+                  width:'100%',
+                  padding:'12px 24px',
+                  background:authLoading ? 'var(--muted)' : '#4b6bff',
+                  border:'none',
+                  borderRadius:8,
+                  color:'#fff',
+                  cursor:authLoading ? 'not-allowed' : 'pointer',
+                  fontSize:16,
+                  fontWeight:600,
+                  marginTop:8
+                }}
+              >
+                {authLoading ? 'Loading...' : authMode === 'login' ? 'Login' : 'Register'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
       <div style={{padding:'0 20px', borderBottom:'1px solid var(--line)', display:'flex', gap:0}}>
         <button
           type="button"
@@ -899,7 +1221,6 @@ export default function Home() {
           </div>
         ) : null}
       </main>
-      </>
-    </AuthGuard>
+    </>
   );
 }
