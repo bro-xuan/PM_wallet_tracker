@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import clientPromise from '@/lib/mongodb';
 import { isEmail } from '@/lib/util';
+import { sendOTPEmail } from '@/lib/email';
+
+// Generate 6-digit OTP
+function generateOTP(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -30,16 +36,16 @@ export async function POST(req: NextRequest) {
     }
 
     const client = await clientPromise;
-    // Use database name from URI, or default to 'pm-wallet-tracker'
     const db = client.db(process.env.MONGODB_DB_NAME || 'pm-wallet-tracker');
     const usersCollection = db.collection('users');
+    const otpsCollection = db.collection('otps');
 
-    // Check if user already exists
+    // Check if user already exists and is verified
     const existingUser = await usersCollection.findOne({
       email: email.toLowerCase(),
     });
 
-    if (existingUser) {
+    if (existingUser && existingUser.emailVerified) {
       return NextResponse.json(
         { error: 'User with this email already exists' },
         { status: 400 }
@@ -49,22 +55,53 @@ export async function POST(req: NextRequest) {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create user
-    const result = await usersCollection.insertOne({
+    // Generate OTP
+    const otp = generateOTP();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // Delete old OTPs for this email (both expired and non-expired)
+    await otpsCollection.deleteMany({
       email: email.toLowerCase(),
-      password: hashedPassword,
-      emailVerified: null,
-      xUserId: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
     });
+
+    // Store new OTP
+    await otpsCollection.insertOne({
+      email: email.toLowerCase(),
+      otp: otp,
+      password: hashedPassword, // Store hashed password temporarily
+      expiresAt: expiresAt,
+      createdAt: new Date(),
+    });
+
+    // Send OTP email
+    try {
+      await sendOTPEmail(email, otp);
+    } catch (emailError: any) {
+      console.error('Failed to send OTP email:', emailError);
+      // Delete the OTP record if email fails
+      const otpRecord = await otpsCollection.findOne({ email: email.toLowerCase() });
+      if (otpRecord) {
+        await otpsCollection.deleteOne({ _id: otpRecord._id });
+      }
+      // Return more specific error message
+      const errorMsg = emailError.message || 'Failed to send verification email';
+      return NextResponse.json(
+        { 
+          error: errorMsg.includes('domain') 
+            ? 'Email sending failed. Please verify your domain in Resend or use a verified email address.'
+            : errorMsg
+        },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json(
       {
         success: true,
-        userId: result.insertedId.toString(),
+        message: 'OTP sent to your email. Please verify to complete registration.',
+        requiresVerification: true,
       },
-      { status: 201 }
+      { status: 200 }
     );
   } catch (error: any) {
     console.error('Registration error:', error);

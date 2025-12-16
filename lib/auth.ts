@@ -33,6 +33,11 @@ export const authOptions = {
           throw new Error('Invalid email or password');
         }
 
+        // Check if email is verified
+        if (!user.emailVerified) {
+          throw new Error('Please verify your email before logging in. Check your inbox for the verification code.');
+        }
+
         // Check password
         if (!user.password) {
           throw new Error('Invalid email or password');

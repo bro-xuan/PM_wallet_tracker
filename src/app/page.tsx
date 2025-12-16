@@ -121,6 +121,11 @@ export default function Home() {
   const [authConfirmPassword, setAuthConfirmPassword] = useState('');
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+  const [showOTPInput, setShowOTPInput] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendSuccess, setResendSuccess] = useState(false);
 
   const walletsSet = useMemo(() => new Set(wallets.map(w => w.toLowerCase())), [wallets]);
   const timeZoneOptions = useMemo(() => {
@@ -362,12 +367,72 @@ export default function Home() {
         setAuthError(data.error || 'Registration failed');
         return;
       }
-      // After successful registration, automatically log in
-      await handleLogin();
+      // Show OTP input step
+      if (data.requiresVerification) {
+        setShowOTPInput(true);
+        setAuthError('');
+      } else {
+        // Fallback: auto-login if OTP not required
+        await handleLogin();
+      }
     } catch (error: any) {
       setAuthError(error.message || 'Registration failed');
     } finally {
       setAuthLoading(false);
+    }
+  }
+
+  async function handleVerifyOTP() {
+    setAuthError('');
+    if (!otpCode || otpCode.length !== 6) {
+      setAuthError('Please enter a valid 6-digit OTP');
+      return;
+    }
+    
+    setOtpLoading(true);
+    try {
+      const resp = await fetch('/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, otp: otpCode }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setAuthError(data.error || 'OTP verification failed');
+        return;
+      }
+      // OTP verified, now log in
+      await handleLogin();
+    } catch (error: any) {
+      setAuthError(error.message || 'OTP verification failed');
+    } finally {
+      setOtpLoading(false);
+    }
+  }
+
+  async function handleResendOTP() {
+    setAuthError('');
+    setResendSuccess(false);
+    setResendLoading(true);
+    try {
+      const resp = await fetch('/api/auth/resend-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setAuthError(data.error || 'Failed to resend code');
+        return;
+      }
+      setResendSuccess(true);
+      setAuthError('');
+      // Clear success message after 3 seconds
+      setTimeout(() => setResendSuccess(false), 3000);
+    } catch (error: any) {
+      setAuthError(error.message || 'Failed to resend code');
+    } finally {
+      setResendLoading(false);
     }
   }
 
@@ -513,6 +578,8 @@ export default function Home() {
             if (e.target === e.currentTarget) {
               setShowAuthModal(false);
               setAuthError('');
+              setShowOTPInput(false);
+              setOtpCode('');
             }
           }}
         >
@@ -531,6 +598,8 @@ export default function Home() {
                 onClick={() => {
                   setAuthMode('login');
                   setAuthError('');
+                  setShowOTPInput(false);
+                  setOtpCode('');
                 }}
                 style={{
                   flex:1,
@@ -551,6 +620,8 @@ export default function Home() {
                 onClick={() => {
                   setAuthMode('register');
                   setAuthError('');
+                  setShowOTPInput(false);
+                  setOtpCode('');
                 }}
                 style={{
                   flex:1,
@@ -582,6 +653,136 @@ export default function Home() {
               </div>
             )}
 
+            {showOTPInput ? (
+              // OTP Verification Step
+              <div style={{display:'flex', flexDirection:'column', gap:16}}>
+                <div style={{
+                  padding:16,
+                  background:'var(--bg)',
+                  border:'1px solid var(--line)',
+                  borderRadius:8,
+                  marginBottom:8
+                }}>
+                  <p style={{margin:0, fontSize:14, color:'var(--muted)', marginBottom:8}}>
+                    We've sent a 6-digit verification code to:
+                  </p>
+                  <p style={{margin:0, fontSize:14, fontWeight:600, color:'var(--ink)'}}>
+                    {authEmail}
+                  </p>
+                </div>
+
+                <div>
+                  <label style={{display:'block', marginBottom:8, fontSize:14, color:'var(--muted)'}}>
+                    Enter Verification Code
+                  </label>
+                  <input
+                    type="text"
+                    value={otpCode}
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/\D/g, '').slice(0, 6);
+                      setOtpCode(value);
+                    }}
+                    placeholder="000000"
+                    maxLength={6}
+                    style={{
+                      width:'100%',
+                      padding:'10px 12px',
+                      background:'var(--bg)',
+                      border:'1px solid var(--line)',
+                      borderRadius:8,
+                      color:'var(--ink)',
+                      fontSize:24,
+                      textAlign:'center',
+                      letterSpacing:'8px',
+                      fontFamily:'monospace'
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleVerifyOTP();
+                      }
+                    }}
+                    autoFocus
+                  />
+                </div>
+
+                {resendSuccess && (
+                  <div style={{
+                    padding:12,
+                    background:'var(--bg)',
+                    border:'1px solid var(--good)',
+                    borderRadius:8,
+                    color:'var(--good)',
+                    fontSize:14,
+                    textAlign:'center'
+                  }}>
+                    ✓ New code sent! Check your email.
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleVerifyOTP}
+                  disabled={otpLoading || otpCode.length !== 6}
+                  style={{
+                    width:'100%',
+                    padding:'12px 24px',
+                    background:otpLoading || otpCode.length !== 6 ? 'var(--muted)' : '#4b6bff',
+                    border:'none',
+                    borderRadius:8,
+                    color:'#fff',
+                    cursor:otpLoading || otpCode.length !== 6 ? 'not-allowed' : 'pointer',
+                    fontSize:16,
+                    fontWeight:600,
+                    marginTop:8
+                  }}
+                >
+                  {otpLoading ? 'Verifying...' : 'Verify Email'}
+                </button>
+
+                <div style={{display:'flex', gap:8}}>
+                  <button
+                    type="button"
+                    onClick={handleResendOTP}
+                    disabled={resendLoading}
+                    style={{
+                      flex:1,
+                      padding:'8px 16px',
+                      background:'transparent',
+                      border:'1px solid var(--line)',
+                      borderRadius:8,
+                      color:'var(--ink)',
+                      cursor:resendLoading ? 'not-allowed' : 'pointer',
+                      fontSize:14,
+                      opacity:resendLoading ? 0.6 : 1
+                    }}
+                  >
+                    {resendLoading ? 'Sending...' : 'Resend Code'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowOTPInput(false);
+                      setOtpCode('');
+                      setAuthError('');
+                      setResendSuccess(false);
+                    }}
+                    style={{
+                      flex:1,
+                      padding:'8px 16px',
+                      background:'transparent',
+                      border:'1px solid var(--line)',
+                      borderRadius:8,
+                      color:'var(--ink)',
+                      cursor:'pointer',
+                      fontSize:14
+                    }}
+                  >
+                    Back
+                  </button>
+                </div>
+              </div>
+            ) : (
+              // Login/Register Form
             <div style={{display:'flex', flexDirection:'column', gap:16}}>
               <div>
                 <label style={{display:'block', marginBottom:8, fontSize:14, color:'var(--muted)'}}>
@@ -683,6 +884,7 @@ export default function Home() {
                 {authLoading ? 'Loading...' : authMode === 'login' ? 'Login' : 'Register'}
               </button>
             </div>
+            )}
           </div>
         </div>
       )}
