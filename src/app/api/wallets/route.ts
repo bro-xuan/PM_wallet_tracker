@@ -1,7 +1,6 @@
 import { auth } from '@/lib/auth';
 import clientPromise from '@/lib/mongodb';
 import { isAddress } from '@/lib/util';
-import db, { stmt } from '@/lib/db';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,35 +14,6 @@ export async function GET() {
   const client = await clientPromise;
   const db_mongo = client.db(process.env.MONGODB_DB_NAME || 'pm-wallet-tracker');
   const walletsCollection = db_mongo.collection('wallets');
-
-  // Auto-migrate SQLite wallets for zhixuan_wang@outlook.de
-  const targetEmail = 'zhixuan_wang@outlook.de';
-  if (session.user.email?.toLowerCase() === targetEmail.toLowerCase()) {
-    const sqliteWallets = stmt.listWallets.all().map((r: any) => r.address as string);
-    if (sqliteWallets.length > 0) {
-      const now = new Date();
-      for (const address of sqliteWallets) {
-        const addrLower = address.toLowerCase();
-        // Use updateOne with upsert to prevent duplicates
-        await walletsCollection.updateOne(
-          { userId: session.user.id, address: addrLower },
-          {
-            $set: {
-              userId: session.user.id,
-              address: addrLower,
-              isActive: true,
-              updatedAt: now,
-            },
-            $setOnInsert: {
-              label: '',
-              createdAt: now,
-            },
-          },
-          { upsert: true }
-        );
-      }
-    }
-  }
 
   const wallets = await walletsCollection.find(
     { userId: session.user.id, isActive: true },

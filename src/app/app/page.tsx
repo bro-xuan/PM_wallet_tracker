@@ -252,10 +252,15 @@ export default function Home() {
     }
     
     setTotalTrades(t.total || 0);
-    setTrades(Array.isArray(t.trades)
-      ? t.trades.filter((trade: Trade) => allowed.has(trade.wallet.toLowerCase()))
-      : []
-    );
+    // API already filters by user wallets, so we can trust the response
+    // But ensure wallet addresses are normalized to lowercase for consistency
+    const normalizedTrades = Array.isArray(t.trades)
+      ? t.trades.map((trade: Trade) => ({
+          ...trade,
+          wallet: String(trade.wallet || '').toLowerCase(), // Normalize to lowercase, handle undefined
+        }))
+      : [];
+    setTrades(normalizedTrades);
   }, [currentPage, pageSize]);
 
   // initial data - only fetch when authenticated
@@ -290,8 +295,15 @@ export default function Home() {
     const es = new EventSource('/api/stream');
     const onTrade = (ev: MessageEvent) => {
       const t = JSON.parse(ev.data) as Trade;
-      if (!walletsRef.current.has(t.wallet.toLowerCase())) return;
-      setTrades(prev => [t, ...prev]);
+      // Normalize wallet to lowercase for consistency
+      const walletLower = t.wallet.toLowerCase();
+      if (!walletsRef.current.has(walletLower)) return;
+      // Ensure trade object has normalized wallet address
+      const normalizedTrade = {
+        ...t,
+        wallet: walletLower,
+      };
+      setTrades(prev => [normalizedTrade, ...prev]);
     };
     es.addEventListener('trade', onTrade);
     return () => {
@@ -345,7 +357,9 @@ export default function Home() {
     const minNotional = Number(notionalPreset || 0);
     const seen = new Set<string>();
     return trades.filter(t => {
-      if (!walletsSet.has(t.wallet.toLowerCase())) return false;
+      // Normalize wallet to lowercase for comparison
+      const walletLower = t.wallet.toLowerCase();
+      if (!walletsSet.has(walletLower)) return false;
       if (minNotional > 0 && t.notional < minNotional) return false;
       if (sideFilter && t.side !== sideFilter) return false;
       if (priceFilter) {
@@ -357,11 +371,12 @@ export default function Home() {
         }
       }
       if (walletQuery) {
-        const label = labels[t.wallet.toLowerCase()] || '';
-        const hay = `${label} ${t.wallet}`.toLowerCase();
+        const label = labels[walletLower] || '';
+        const hay = `${label} ${walletLower}`.toLowerCase();
         if (!hay.includes(walletQuery)) return false;
       }
-      const uniqueKey = `${t.txhash}-${t.wallet}-${t.timestamp}`;
+      // Use lowercase wallet in unique key for consistency
+      const uniqueKey = `${t.txhash}-${walletLower}-${t.timestamp}`;
       if (seen.has(uniqueKey)) return false;
       seen.add(uniqueKey);
       return true;

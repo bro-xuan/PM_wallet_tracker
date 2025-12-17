@@ -1,5 +1,4 @@
 import { auth } from '@/lib/auth';
-import { stmt } from '@/lib/db';
 import clientPromise from '@/lib/mongodb';
 import { isAddress } from '@/lib/util';
 
@@ -24,6 +23,8 @@ export async function DELETE(req: Request) {
   const client = await clientPromise;
   const db = client.db(process.env.MONGODB_DB_NAME || 'pm-wallet-tracker');
   const walletsCollection = db.collection('wallets');
+  const cursorsCollection = db.collection('cursors');
+  const tradesCollection = db.collection('trades');
 
   // Delete wallet from MongoDB (user-specific)
   const result = await walletsCollection.deleteOne({
@@ -35,10 +36,9 @@ export async function DELETE(req: Request) {
     return Response.json({ error: 'Wallet not found' }, { status: 404 });
   }
 
-  // Also clean up SQLite data (cursors and trades) for this wallet
-  // Note: In future, trades should also be user-specific
-  stmt.deleteCursor.run(a);
-  stmt.deleteTradesByWallet.run(a);
+  // Clean up Mongo cursor and trades for this wallet
+  await cursorsCollection.deleteMany({ address: a });
+  await tradesCollection.deleteMany({ proxyWallet: a });
 
   return Response.json({ removed: a });
 }

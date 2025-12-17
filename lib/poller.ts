@@ -1,4 +1,3 @@
-import db, { stmt } from './db';
 import { publish } from './bus';
 import { fetchTradesForUser, DataTrade } from './polymarket';
 import clientPromise from './mongodb';
@@ -6,19 +5,90 @@ import clientPromise from './mongodb';
 const globalAny = globalThis as any;
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 1000);
 
+async function getDb() {
+  const client = await clientPromise;
+  return client.db(process.env.MONGODB_DB_NAME || 'pm-wallet-tracker');
+}
+
+// Get distinct active wallet addresses across all users from MongoDB
 async function wallets(): Promise<string[]> {
   try {
-    const client = await clientPromise;
-    const db_mongo = client.db(process.env.MONGODB_DB_NAME || 'pm-wallet-tracker');
-    const walletsCollection = db_mongo.collection('wallets');
+    const db = await getDb();
+    const walletsCollection = db.collection('wallets');
     const allWallets = await walletsCollection.find(
       { isActive: true },
       { projection: { address: 1, _id: 0 } }
     ).toArray();
-    return allWallets.map((w: any) => w.address);
+    // Ensure lowercase + uniqueness
+    const set = new Set<string>();
+    allWallets.forEach((w: any) => {
+      if (w.address) set.add(String(w.address).toLowerCase());
+    });
+    return Array.from(set);
   } catch (error) {
     console.error('[poller] Error fetching wallets from MongoDB:', error);
     return [];
+  }
+}
+
+async function getCursor(address: string): Promise<number> {
+  try {
+    const db = await getDb();
+    const cursors = db.collection('cursors');
+    const doc = await cursors.findOne<{ last_ts?: number }>({ address });
+    return doc?.last_ts ?? 0;
+  } catch (error) {
+    console.error('[poller] Error reading cursor:', error);
+    return 0;
+  }
+}
+
+async function updateCursor(address: string, lastTs: number) {
+  try {
+    const db = await getDb();
+    const cursors = db.collection('cursors');
+    await cursors.updateOne(
+      { address },
+      { $set: { address, last_ts: lastTs } },
+      { upsert: true }
+    );
+  } catch (error) {
+    console.error('[poller] Error updating cursor:', error);
+  }
+}
+
+async function upsertTrade(t: DataTrade): Promise<boolean> {
+  try {
+    const db = await getDb();
+    const trades = db.collection('trades');
+    // Ensure proxyWallet is always lowercase for consistent filtering
+    const proxyWalletLower = String(t.proxyWallet).toLowerCase();
+    const result = await trades.updateOne(
+      { txhash: t.transactionHash },
+      {
+        $set: {
+          txhash: t.transactionHash,
+          proxyWallet: proxyWalletLower,
+          side: t.side,
+          size: t.size,
+          price: t.price,
+          outcome: t.outcome ?? null,
+          title: t.title ?? null,
+          slug: t.slug ?? null,
+          timestamp: t.timestamp,
+          updatedAt: new Date(), // Track when trade was last updated
+        },
+        $setOnInsert: {
+          createdAt: new Date(), // Track when trade was first created
+        },
+      },
+      { upsert: true }
+    );
+    // Return true if trade was inserted or updated
+    return result.upsertedCount > 0 || result.modifiedCount > 0 || result.matchedCount > 0;
+  } catch (error) {
+    console.error('[poller] Error upserting trade:', error);
+    return false;
   }
 }
 
@@ -33,8 +103,7 @@ async function processNextWallet() {
 
   try {
     const rows = await fetchTradesForUser(address, 50);
-    const c = stmt.getCursor.get(address) as { last_ts?: number } | undefined;
-    const lastTs = c?.last_ts ?? 0;
+    const lastTs = await getCursor(address);
 
     // rows are newest-first; we only want trades with txHash not seen AND ts > cursor
     const fresh: DataTrade[] = [];
@@ -47,13 +116,20 @@ async function processNextWallet() {
     // oldest -> newest for deterministic inserts & UI
     for (let i = fresh.length - 1; i >= 0; i--) {
       const t = fresh[i];
-      stmt.insertTrade.run(
-        t.transactionHash, t.proxyWallet, t.side, t.size, t.price,
-        t.outcome ?? null, t.title ?? null, t.slug ?? null, t.timestamp
-      );
+      // Save to MongoDB first (await to ensure it's committed before publishing)
+      const saved = await upsertTrade(t);
+      if (!saved) {
+        console.warn(`[poller:${address}] Failed to save trade ${t.transactionHash}`);
+        continue; // Skip publishing if save failed
+      }
+      // Small delay to ensure MongoDB write is fully committed
+      await new Promise(r => setTimeout(r, 10));
+      // Then publish to SSE for real-time updates
+      // Use lowercase wallet address for consistency with API queries
+      const walletLower = String(t.proxyWallet).toLowerCase();
       publish({
         txhash: t.transactionHash,
-        wallet: t.proxyWallet,
+        wallet: walletLower,
         side: t.side,
         size: t.size,
         price: t.price,
@@ -67,7 +143,7 @@ async function processNextWallet() {
     }
 
     const newest = Math.max(lastTs, 0, ...rows.map(r => r.timestamp || 0));
-    if (newest > lastTs) stmt.upsertCursor.run(address, newest);
+    if (newest > lastTs) await updateCursor(address, newest);
   } catch (e: any) {
     console.error(`[poller:${address}]`, e.message);
   }
