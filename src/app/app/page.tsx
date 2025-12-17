@@ -111,6 +111,16 @@ export default function Home() {
   // Whale Alerts state
   const [telegramConnected, setTelegramConnected] = useState(false);
   const [telegramUsername, setTelegramUsername] = useState<string | null>(null);
+  const [checkingTelegram, setCheckingTelegram] = useState(false);
+  const [alertConfig, setAlertConfig] = useState({
+    minNotionalUsd: 10000,
+    minPrice: 0.05,
+    maxPrice: 0.95,
+    sides: ['BUY', 'SELL'] as ('BUY' | 'SELL')[],
+    enabled: false,
+  });
+  const [configLoading, setConfigLoading] = useState(false);
+  const [testNotificationLoading, setTestNotificationLoading] = useState(false);
   
   // Auth state
   const { data: session, status: sessionStatus } = useSession();
@@ -1449,23 +1459,52 @@ export default function Home() {
                 <div style={{display:'flex', flexDirection:'column', gap:16}}>
                   <button
                     type="button"
-                    onClick={() => {
-                      // TODO: Implement Telegram connection
-                      console.log('Connect Telegram clicked');
+                    onClick={async () => {
+                      if (!session?.user?.id) return;
+                      setCheckingTelegram(true);
+                      // Ensure bot is initialized
+                      await fetch('/api/telegram/init', { cache: 'no-store' });
+                      // Open Telegram with deep link
+                      const telegramUrl = `https://t.me/PM_Intel_bot?start=${session.user.id}`;
+                      window.open(telegramUrl, '_blank');
+                      // Poll for connection status
+                      let attempts = 0;
+                      const maxAttempts = 30; // 30 seconds
+                      const pollInterval = setInterval(async () => {
+                        attempts++;
+                        const res = await fetch('/api/telegram/status', { cache: 'no-store' });
+                        const data = await res.json();
+                        if (data.connected) {
+                          setTelegramConnected(true);
+                          setTelegramUsername(data.username);
+                          clearInterval(pollInterval);
+                          setCheckingTelegram(false);
+                        } else if (attempts >= maxAttempts) {
+                          clearInterval(pollInterval);
+                          setCheckingTelegram(false);
+                        }
+                      }, 1000);
                     }}
+                    disabled={checkingTelegram}
                     style={{
                       padding:'12px 24px',
-                      background:'#0088cc',
+                      background:checkingTelegram ? 'var(--muted)' : '#0088cc',
                       color:'#fff',
                       border:'none',
                       borderRadius:8,
-                      cursor:'pointer',
+                      cursor:checkingTelegram ? 'not-allowed' : 'pointer',
                       fontSize:16,
-                      fontWeight:600
+                      fontWeight:600,
+                      opacity:checkingTelegram ? 0.7 : 1
                     }}
                   >
-                    Connect Telegram
+                    {checkingTelegram ? 'Waiting for connection...' : 'Connect Telegram'}
                   </button>
+                  {checkingTelegram && (
+                    <p className="muted" style={{fontSize:14, textAlign:'center'}}>
+                      Click "Start" in the Telegram chat to connect
+                    </p>
+                  )}
                 </div>
               ) : (
                 <div style={{display:'flex', flexDirection:'column', gap:16}}>
@@ -1479,51 +1518,261 @@ export default function Home() {
                     justifyContent:'space-between'
                   }}>
                     <div>
-                      <div style={{fontSize:14, color:'var(--muted)', marginBottom:4}}>Connected to</div>
-                      <div style={{fontSize:16, fontWeight:600}}>
-                        @{telegramUsername || 'username'}
+                      <div style={{fontSize:14, color:'var(--muted)', marginBottom:4}}>Telegram</div>
+                      <div style={{fontSize:16, fontWeight:600, display:'flex', alignItems:'center', gap:8}}>
+                        {telegramUsername ? `@${telegramUsername}` : 'Connected'}
+                        <span style={{color:'var(--good)', fontSize:20}}>✅</span>
                       </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!confirm('Disconnect Telegram account?')) return;
+                        try {
+                          await fetch('/api/telegram/disconnect', { method: 'POST', cache: 'no-store' });
+                          setTelegramConnected(false);
+                          setTelegramUsername(null);
+                        } catch (error) {
+                          console.error('Failed to disconnect:', error);
+                        }
+                      }}
+                      style={{
+                        padding:'6px 12px',
+                        background:'transparent',
+                        color:'var(--bad)',
+                        border:'1px solid var(--line)',
+                        borderRadius:6,
+                        cursor:'pointer',
+                        fontSize:12
+                      }}
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+
+                  {/* Filter Settings */}
+                  <div style={{
+                    padding:20,
+                    background:'var(--bg)',
+                    borderRadius:8,
+                    border:'1px solid var(--line)'
+                  }}>
+                    <h4 style={{marginTop:0, marginBottom:16}}>Alert Filters</h4>
+                    
+                    <div style={{display:'flex', flexDirection:'column', gap:16}}>
+                      {/* Min Notional */}
+                      <div>
+                        <label style={{display:'block', fontSize:14, marginBottom:8, color:'var(--ink)'}}>
+                          Minimum Notional (USD)
+                        </label>
+                        <input
+                          type="number"
+                          value={alertConfig.minNotionalUsd}
+                          onChange={e => setAlertConfig(prev => ({...prev, minNotionalUsd: Number(e.target.value)}))}
+                          min="0"
+                          step="100"
+                          style={{
+                            width:'100%',
+                            padding:'8px 12px',
+                            borderRadius:6,
+                            border:'1px solid var(--line)',
+                            background:'var(--bg)',
+                            color:'var(--ink)',
+                            fontSize:14
+                          }}
+                        />
+                      </div>
+
+                      {/* Price Range */}
+                      <div>
+                        <label style={{display:'block', fontSize:14, marginBottom:8, color:'var(--ink)'}}>
+                          Price Range
+                        </label>
+                        <div style={{display:'flex', gap:12, alignItems:'center'}}>
+                          <input
+                            type="number"
+                            value={Math.round(alertConfig.minPrice * 100)}
+                            onChange={e => {
+                              const val = Number(e.target.value) / 100;
+                              if (val >= 0 && val < alertConfig.maxPrice) {
+                                setAlertConfig(prev => ({...prev, minPrice: val}));
+                              }
+                            }}
+                            min="0"
+                            max="100"
+                            step="1"
+                            style={{
+                              flex:1,
+                              padding:'8px 12px',
+                              borderRadius:6,
+                              border:'1px solid var(--line)',
+                              background:'var(--bg)',
+                              color:'var(--ink)',
+                              fontSize:14
+                            }}
+                          />
+                          <span style={{color:'var(--muted)'}}>%</span>
+                          <span style={{color:'var(--muted)'}}>to</span>
+                          <input
+                            type="number"
+                            value={Math.round(alertConfig.maxPrice * 100)}
+                            onChange={e => {
+                              const val = Number(e.target.value) / 100;
+                              if (val > alertConfig.minPrice && val <= 1) {
+                                setAlertConfig(prev => ({...prev, maxPrice: val}));
+                              }
+                            }}
+                            min="0"
+                            max="100"
+                            step="1"
+                            style={{
+                              flex:1,
+                              padding:'8px 12px',
+                              borderRadius:6,
+                              border:'1px solid var(--line)',
+                              background:'var(--bg)',
+                              color:'var(--ink)',
+                              fontSize:14
+                            }}
+                          />
+                          <span style={{color:'var(--muted)'}}>%</span>
+                        </div>
+                        <div style={{fontSize:12, color:'var(--muted)', marginTop:4}}>
+                          {Math.round(alertConfig.minPrice * 100)}% - {Math.round(alertConfig.maxPrice * 100)}%
+                        </div>
+                      </div>
+
+                      {/* Sides */}
+                      <div>
+                        <label style={{display:'block', fontSize:14, marginBottom:8, color:'var(--ink)'}}>
+                          Trade Sides
+                        </label>
+                        <div style={{display:'flex', gap:12}}>
+                          <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer'}}>
+                            <input
+                              type="checkbox"
+                              checked={alertConfig.sides.includes('BUY')}
+                              onChange={e => {
+                                if (e.target.checked) {
+                                  setAlertConfig(prev => ({...prev, sides: [...prev.sides, 'BUY']}));
+                                } else {
+                                  setAlertConfig(prev => ({...prev, sides: prev.sides.filter(s => s !== 'BUY')}));
+                                }
+                              }}
+                            />
+                            <span>Buy</span>
+                          </label>
+                          <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer'}}>
+                            <input
+                              type="checkbox"
+                              checked={alertConfig.sides.includes('SELL')}
+                              onChange={e => {
+                                if (e.target.checked) {
+                                  setAlertConfig(prev => ({...prev, sides: [...prev.sides, 'SELL']}));
+                                } else {
+                                  setAlertConfig(prev => ({...prev, sides: prev.sides.filter(s => s !== 'SELL')}));
+                                }
+                              }}
+                            />
+                            <span>Sell</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      {/* Enabled Toggle */}
+                      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between'}}>
+                        <label style={{fontSize:14, color:'var(--ink)', cursor:'pointer'}}>
+                          Enable Alerts
+                        </label>
+                        <input
+                          type="checkbox"
+                          checked={alertConfig.enabled}
+                          onChange={e => setAlertConfig(prev => ({...prev, enabled: e.target.checked}))}
+                          style={{cursor:'pointer'}}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Save Button */}
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (alertConfig.sides.length === 0) {
+                          alert('Please select at least one trade side (Buy or Sell)');
+                          return;
+                        }
+                        setConfigLoading(true);
+                        try {
+                          const res = await fetch('/api/whale-alerts/config', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(alertConfig),
+                            cache: 'no-store',
+                          });
+                          if (!res.ok) throw new Error('Failed to save config');
+                          alert('Settings saved successfully!');
+                        } catch (error) {
+                          console.error('Failed to save config:', error);
+                          alert('Failed to save settings');
+                        } finally {
+                          setConfigLoading(false);
+                        }
+                      }}
+                      disabled={configLoading || alertConfig.sides.length === 0}
+                      style={{
+                        width:'100%',
+                        marginTop:20,
+                        padding:'12px 24px',
+                        background:configLoading || alertConfig.sides.length === 0 ? 'var(--muted)' : '#4b6bff',
+                        color:'#fff',
+                        border:'none',
+                        borderRadius:8,
+                        cursor:configLoading || alertConfig.sides.length === 0 ? 'not-allowed' : 'pointer',
+                        fontSize:16,
+                        fontWeight:600
+                      }}
+                    >
+                      {configLoading ? 'Saving...' : 'Save Settings'}
+                    </button>
                   </div>
                   
+                  {/* Test Notification Button */}
                   <button
                     type="button"
-                    onClick={() => {
-                      // TODO: Implement test notification
-                      console.log('Test notification clicked');
+                    onClick={async () => {
+                      setTestNotificationLoading(true);
+                      try {
+                        const res = await fetch('/api/whale-alerts/test', {
+                          method: 'POST',
+                          cache: 'no-store',
+                        });
+                        const data = await res.json();
+                        if (res.ok) {
+                          alert('Test notification sent! Check your Telegram.');
+                        } else {
+                          alert(data.error || 'Failed to send test notification');
+                        }
+                      } catch (error) {
+                        console.error('Failed to send test notification:', error);
+                        alert('Failed to send test notification');
+                      } finally {
+                        setTestNotificationLoading(false);
+                      }
                     }}
+                    disabled={testNotificationLoading}
                     style={{
                       padding:'12px 24px',
                       background:'transparent',
                       color:'var(--ink)',
                       border:'1px solid var(--line)',
                       borderRadius:8,
-                      cursor:'pointer',
+                      cursor:testNotificationLoading ? 'not-allowed' : 'pointer',
                       fontSize:16,
-                      fontWeight:500
+                      fontWeight:500,
+                      opacity:testNotificationLoading ? 0.6 : 1
                     }}
                   >
-                    Test notification
-                  </button>
-                  
-                  <button
-                    type="button"
-                    onClick={() => {
-                      // TODO: Implement test alert
-                      console.log('Send test alert clicked');
-                    }}
-                    style={{
-                      padding:'12px 24px',
-                      background:'transparent',
-                      color:'var(--ink)',
-                      border:'1px solid var(--line)',
-                      borderRadius:8,
-                      cursor:'pointer',
-                      fontSize:16,
-                      fontWeight:500
-                    }}
-                  >
-                    Send test alert
+                    {testNotificationLoading ? 'Sending...' : 'Test Notification'}
                   </button>
                 </div>
               )}

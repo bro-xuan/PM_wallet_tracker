@@ -22,4 +22,6 @@ Long‑term
 Retire SQLite completely for production, or keep it only as a local cache / dev tool.
 
 ------ 
+Track wallet categorization
+-----
 

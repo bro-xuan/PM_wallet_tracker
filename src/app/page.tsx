@@ -213,8 +213,8 @@ export default function LandingPage() {
           </div>
           <div style={{ fontSize: 14, color: 'rgba(255, 255, 255, 0.9)', fontWeight: 500 }}>
             LIVE UPDATES
-          </div>
-        </div>
+            </div>
+            </div>
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: 'clamp(32px, 5vw, 48px)', fontWeight: 700, color: '#fff', marginBottom: 8 }}>
             AI READY

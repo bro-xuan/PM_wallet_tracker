@@ -16,6 +16,7 @@
     "mongoose": "^9.0.1",
     "next": "16.0.3",
     "next-auth": "^5.0.0-beta.30",
+    "node-telegram-bot-api": "^0.67.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "resend": "^6.6.0"

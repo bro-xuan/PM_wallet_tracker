@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { subscribe } from '@/lib/bus';
 import '@/lib/poller'; // ensure poller starts in this process
+import '@/lib/telegram-bot'; // ensure telegram bot is initialized
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
