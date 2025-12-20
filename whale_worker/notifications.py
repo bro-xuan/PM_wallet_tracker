@@ -1,11 +1,11 @@
 """
 Telegram notification sending for whale trade alerts.
+
+Uses queue-based rate limiting for efficient, non-blocking message sending.
 """
-import time
 from typing import List
-import httpx
 from whale_worker.types import Trade, MarketMetadata, UserFilter
-from whale_worker.config import Config
+from whale_worker.notification_queue import enqueue_notification
 
 
 def build_trade_alert_message(
@@ -69,83 +69,23 @@ Size: {trade.size:,.2f} | Price: {trade.price:.2%}
     return message
 
 
+# Legacy function kept for backward compatibility, but now uses queue
 def send_alert_to_chat(chat_id: str, message: str) -> bool:
     """
-    Send a Telegram message to a specific chat.
+    Enqueue a Telegram message to be sent (queue-based, non-blocking).
+    
+    This function now uses the notification queue for proper rate limiting.
+    The message will be sent asynchronously with per-chat and global throttling.
     
     Args:
         chat_id: Telegram chat ID.
         message: Message text (HTML formatted).
     
     Returns:
-        True if sent successfully, False otherwise.
+        True (message is queued, actual send happens asynchronously).
     """
-    config = Config.get_config()
-    
-    if not config.TELEGRAM_BOT_TOKEN:
-        print(f"   ❌ TELEGRAM_BOT_TOKEN not configured")
-        return False
-    
-    url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
-    
-    payload = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": False,
-    }
-    
-    try:
-        with httpx.Client(timeout=10.0) as client:
-            response = client.post(url, json=payload)
-            response.raise_for_status()
-            result = response.json()
-            
-            if result.get("ok"):
-                return True
-            else:
-                print(f"   ❌ Telegram API error: {result.get('description', 'Unknown error')}")
-                return False
-                
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 429:
-            # Rate limited - extract retry_after from response
-            try:
-                error_data = e.response.json()
-                retry_after = error_data.get("parameters", {}).get("retry_after", 1)
-                print(f"   ⏳ Rate limited, waiting {retry_after}s...")
-                time.sleep(retry_after)
-                # Retry once
-                try:
-                    with httpx.Client(timeout=10.0) as client:
-                        response = client.post(url, json=payload)
-                        response.raise_for_status()
-                        return response.json().get("ok", False)
-                except:
-                    return False
-            except:
-                print(f"   ❌ Rate limited (429)")
-                return False
-        elif e.response.status_code == 403:
-            print(f"   ❌ User blocked bot or chat_id invalid: {chat_id[:10]}...")
-            return False
-        elif e.response.status_code == 400:
-            print(f"   ❌ Invalid chat_id: {chat_id[:10]}...")
-            return False
-        else:
-            print(f"   ❌ Telegram API error: HTTP {e.response.status_code}")
-            try:
-                error_data = e.response.json()
-                print(f"      Error: {error_data.get('description', 'Unknown')}")
-            except:
-                pass
-            return False
-    except httpx.TimeoutException:
-        print(f"   ❌ Timeout sending to {chat_id[:10]}...")
-        return False
-    except Exception as e:
-        print(f"   ❌ Error sending to {chat_id[:10]}...: {e}")
-        return False
+    enqueue_notification(chat_id, message)
+    return True  # Return True since message is queued successfully
 
 
 def send_alerts_for_trade(
@@ -154,7 +94,13 @@ def send_alerts_for_trade(
     matching_users: List[UserFilter]
 ) -> None:
     """
-    Send alerts to all matching users for a trade.
+    Enqueue alerts for all matching users for a trade.
+    
+    Messages are queued and sent asynchronously with proper rate limiting:
+    - Per-chat throttling (1 msg/sec per chat to avoid spam)
+    - Global throttling (~30 msg/sec globally)
+    - Respects retry_after on 429 errors
+    - Marks accounts as inactive on 403/400 errors
     
     Args:
         trade: Trade that triggered alerts.
@@ -167,29 +113,22 @@ def send_alerts_for_trade(
     # Build message once (same for all users)
     message = build_trade_alert_message(trade, market, matching_users[0])
     
-    # Send to each user
-    success_count = 0
-    failure_count = 0
+    # Enqueue messages for all users (non-blocking)
+    queued_count = 0
+    skipped_count = 0
     
     for user_filter in matching_users:
         if not user_filter.telegram_chat_id:
             print(f"      ⚠️  User {user_filter.user_id[:8]}... has no chat_id, skipping")
-            failure_count += 1
+            skipped_count += 1
             continue
         
-        sent = send_alert_to_chat(user_filter.telegram_chat_id, message)
-        
-        if sent:
-            success_count += 1
-        else:
-            failure_count += 1
-        
-        # Small delay between sends to respect rate limits (Telegram allows ~30 messages/second)
-        # Using 0.05s = 20 messages/second to be safe
-        time.sleep(0.05)
+        # Enqueue message (queue handles rate limiting)
+        enqueue_notification(user_filter.telegram_chat_id, message)
+        queued_count += 1
     
-    if success_count > 0:
-        print(f"      ✅ Sent {success_count} alert(s)")
-    if failure_count > 0:
-        print(f"      ❌ Failed to send {failure_count} alert(s)")
+    if queued_count > 0:
+        print(f"      📬 Queued {queued_count} alert(s) (sending asynchronously with rate limiting)")
+    if skipped_count > 0:
+        print(f"      ⚠️  Skipped {skipped_count} user(s) (no chat_id)")
 

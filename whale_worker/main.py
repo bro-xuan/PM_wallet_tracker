@@ -24,6 +24,7 @@ from whale_worker.polymarket_client import (
 )
 from whale_worker.filters import get_matching_users_for_trade
 from whale_worker.notifications import send_alerts_for_trade
+from whale_worker.notification_queue import get_notification_queue
 from whale_worker.types import TradeMarker
 
 
@@ -60,6 +61,14 @@ def run_worker() -> None:
     except Exception as e:
         print(f"❌ Failed to connect to MongoDB: {e}")
         raise
+    
+    # Start notification queue worker (for async, rate-limited message sending)
+    notification_queue = get_notification_queue()
+    print("✅ Notification queue initialized")
+    
+    # Ensure queue is stopped on exit
+    import atexit
+    atexit.register(lambda: notification_queue.stop())
     
     # Step 3: Load sports tag IDs and tags dictionary (for categorization)
     print("\n📋 Loading market categorization data...")
@@ -280,10 +289,16 @@ def run_worker() -> None:
         print(f"   Processed {poll_count} polls")
         if last_marker:
             print(f"   Last marker: timestamp={last_marker.last_processed_timestamp}")
+        
+        # Stop notification queue
+        notification_queue.stop()
     except Exception as e:
         print(f"\n❌ Fatal error: {e}")
         import traceback
         traceback.print_exc()
+        
+        # Stop notification queue on error
+        notification_queue.stop()
         raise
 
 
