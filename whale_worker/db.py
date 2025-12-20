@@ -60,8 +60,8 @@ def get_all_user_filters() -> List[UserFilter]:
         List of UserFilter objects for users with enabled alerts and active Telegram.
     """
     db = get_db()
-    configs_collection = db.collection('whaleAlertConfigs')
-    telegram_collection = db.collection('telegramAccounts')
+    configs_collection = db['whaleAlertConfigs']
+    telegram_collection = db['telegramAccounts']
     
     # Find all enabled configs
     configs = configs_collection.find({ 'enabled': True }).to_list(None)
@@ -130,7 +130,7 @@ def get_last_processed_trade_marker() -> Optional[TradeMarker]:
         TradeMarker if exists, None if no trades have been processed yet.
     """
     db = get_db()
-    cursors_collection = db.collection('whaleAlertCursors')
+    cursors_collection = db['whaleAlertCursors']
     
     # Use a fixed document ID for the global whale worker cursor
     doc = cursors_collection.find_one({ '_id': 'whale_worker_global' })
@@ -153,7 +153,7 @@ def set_last_processed_trade_marker(marker: TradeMarker) -> None:
         marker: TradeMarker with updated timestamp and tx_hash.
     """
     db = get_db()
-    cursors_collection = db.collection('whaleAlertCursors')
+    cursors_collection = db['whaleAlertCursors']
     
     # Upsert with fixed _id for global cursor
     cursors_collection.update_one(
@@ -185,7 +185,7 @@ def mark_trade_as_processed(tx_hash: str, ttl_minutes: int = 15) -> None:
         ttl_minutes: TTL in minutes (default: 15 minutes).
     """
     db = get_db()
-    processed_trades_collection = db.collection('processedTrades')
+    processed_trades_collection = db['processedTrades']
     
     # Create document with TTL
     expires_at = datetime.utcnow() + timedelta(minutes=ttl_minutes)
@@ -217,7 +217,7 @@ def is_trade_processed(tx_hash: str) -> bool:
         True if trade has been processed (and not expired), False otherwise.
     """
     db = get_db()
-    processed_trades_collection = db.collection('processedTrades')
+    processed_trades_collection = db['processedTrades']
     
     # Check if trade exists and hasn't expired
     doc = processed_trades_collection.find_one({
@@ -236,7 +236,7 @@ def ensure_processed_trades_ttl_index() -> None:
     that automatically deletes expired documents.
     """
     db = get_db()
-    processed_trades_collection = db.collection('processedTrades')
+    processed_trades_collection = db['processedTrades']
     
     # Create TTL index on expiresAt field (if it doesn't exist)
     # MongoDB will automatically delete documents after expiresAt
@@ -271,7 +271,7 @@ def get_or_upsert_market(condition_id: str, market_metadata: Optional[MarketMeta
     from whale_worker.types import MarketMetadata
     
     db = get_db()
-    markets_collection = db.collection('marketMetadata')
+    markets_collection = db['marketMetadata']
     
     # Try to get from cache first
     cached = markets_collection.find_one({ 'conditionId': condition_id })
@@ -354,7 +354,7 @@ def get_or_cache_sports_tag_ids(sports_tag_ids: Optional[Set[str]] = None) -> Se
         Set of sports tag IDs (from cache or provided).
     """
     db = get_db()
-    cache_collection = db.collection('gammaCache')
+    cache_collection = db['gammaCache']
     
     # Try to get from cache
     cached = cache_collection.find_one({ '_id': 'sports_tag_ids' })
@@ -395,7 +395,7 @@ def get_or_cache_tags_dictionary(tags_dict: Optional[Dict[str, Dict]] = None) ->
         Tags dictionary (from cache or provided).
     """
     db = get_db()
-    cache_collection = db.collection('gammaCache')
+    cache_collection = db['gammaCache']
     
     # Try to get from cache
     cached = cache_collection.find_one({ '_id': 'tags_dictionary' })
