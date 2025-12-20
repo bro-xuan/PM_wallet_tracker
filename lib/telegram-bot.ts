@@ -7,8 +7,51 @@ const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'PM_Intel_bot';
 
 // Lazy initialization: bot is only created when needed
 // This prevents issues in serverless environments where module loading happens multiple times
-let bot: TelegramBot | null = null;
-let handlersInitialized = false;
+// Use global variable in development to persist across HMR reloads
+const globalAny = globalThis as typeof globalThis & {
+  _telegramBot?: TelegramBot | null;
+  _telegramBotHandlersInitialized?: boolean;
+};
+
+// In development, use global to persist across HMR reloads
+// In production, use module-level variable (serverless-friendly)
+// Note: We don't export this directly - use getBotInstance() instead
+let _botModule: TelegramBot | null = null;
+let _handlersInitializedModule = false;
+
+// Get bot instance (from global in dev, module in prod)
+function getBotInstance(): TelegramBot | null {
+  if (process.env.NODE_ENV === 'development') {
+    return globalAny._telegramBot ?? null;
+  }
+  return _botModule;
+}
+
+// Set bot instance (to global in dev, module in prod)
+function setBotInstance(instance: TelegramBot | null) {
+  if (process.env.NODE_ENV === 'development') {
+    globalAny._telegramBot = instance;
+  } else {
+    _botModule = instance;
+  }
+}
+
+// Get handlers initialized flag
+function getHandlersInitialized(): boolean {
+  if (process.env.NODE_ENV === 'development') {
+    return globalAny._telegramBotHandlersInitialized ?? false;
+  }
+  return _handlersInitializedModule;
+}
+
+// Set handlers initialized flag
+function setHandlersInitialized(value: boolean) {
+  if (process.env.NODE_ENV === 'development') {
+    globalAny._telegramBotHandlersInitialized = value;
+  } else {
+    _handlersInitializedModule = value;
+  }
+}
 
 // Determine if we should use polling (only in development, never in production)
 const shouldUsePolling = () => {
@@ -20,21 +63,23 @@ const shouldUsePolling = () => {
 // Initialize bot instance (lazy, only when needed)
 function getBot(): TelegramBot | null {
   if (!BOT_TOKEN) {
-    if (!handlersInitialized) {
+    if (!getHandlersInitialized()) {
       console.warn('[telegram-bot] TELEGRAM_BOT_TOKEN not set. Telegram features will be disabled.');
     }
     return null;
   }
 
-  // If bot already exists, return it
-  if (bot) {
-    return bot;
+  // If bot already exists (check global in dev, module in prod), return it
+  const existingBot = getBotInstance();
+  if (existingBot) {
+    return existingBot;
   }
 
   // Create bot instance (without polling in production - webhook only)
   try {
     const usePolling = shouldUsePolling();
-    bot = new TelegramBot(BOT_TOKEN, { polling: usePolling });
+    const newBot = new TelegramBot(BOT_TOKEN, { polling: usePolling });
+    setBotInstance(newBot);
     
     if (usePolling) {
       console.log(`[telegram-bot] Bot initialized with polling mode (development only)`);
@@ -43,22 +88,22 @@ function getBot(): TelegramBot | null {
     }
   } catch (error: any) {
     console.error('[telegram-bot] Failed to initialize bot:', error.message);
-    bot = null;
+    setBotInstance(null);
     return null;
   }
 
   // Set up handlers only once
-  if (!handlersInitialized) {
+  if (!getHandlersInitialized()) {
     setupHandlers();
-    handlersInitialized = true;
+    setHandlersInitialized(true);
   }
 
-  return bot;
+  return getBotInstance();
 }
 
 // Set up bot command handlers
 function setupHandlers() {
-  const botInstance = bot;
+  const botInstance = getBotInstance();
   if (!botInstance) return;
 
   // Log all messages for debugging (set up first)
@@ -84,7 +129,7 @@ function setupHandlers() {
       
       if (!token) {
         console.log('[telegram-bot] ⚠️ /start without token');
-        await bot?.sendMessage(chatId, 
+        await botInstance?.sendMessage(chatId, 
           'Welcome to PM Intel Bot! 🐋\n\n' +
           'To connect your account, please use the connection link from the website.'
         );
@@ -108,7 +153,7 @@ function setupHandlers() {
         
         if (!tokenDoc) {
           console.log('[telegram-bot] ❌ Invalid or expired token');
-          await bot?.sendMessage(
+          await botInstance?.sendMessage(
             chatId,
             '❌ Invalid or expired connection link.\n\n' +
             'Please go back to the website and click "Connect Telegram" again to get a new link.'
@@ -149,7 +194,7 @@ function setupHandlers() {
           upserted: result.upsertedCount,
         });
         
-        await bot.sendMessage(
+        await botInstance.sendMessage(
           chatId,
           '✅ Connected!\n\n' +
           'You will now receive whale trade alerts based on your filter settings.\n\n' +
@@ -160,7 +205,7 @@ function setupHandlers() {
       } catch (error: any) {
         console.error('[telegram-bot] ❌ Error connecting user:', error);
         try {
-          await bot?.sendMessage(
+          await botInstance?.sendMessage(
             chatId,
             '❌ Error connecting your account. Please try again or contact support.'
           );
@@ -188,11 +233,22 @@ function setupHandlers() {
     });
     
     botInstance.on('polling_error', (error: any) => {
-      console.error('[telegram-bot] ❌ Polling error:', error);
-      // 409 conflict is normal when multiple instances try to poll (dev only)
+      // 409 conflict means another instance is polling - stop this instance
       if (error.message?.includes('409') || error.code === 'ETELEGRAM') {
-        console.log('[telegram-bot] ⚠️  409 conflict (multiple instances - this is normal in development)');
+        console.warn('[telegram-bot] ⚠️  409 Conflict: Another bot instance is polling. Stopping this instance to prevent conflicts.');
+        console.warn('[telegram-bot] 💡 Solution: Only one instance should poll. Check for duplicate imports or restart the dev server.');
+        
+        // Stop polling on this instance to prevent conflicts
+        try {
+          botInstance.stopPolling();
+          setBotInstance(null); // Clear the instance so it can be recreated if needed
+        } catch (stopError) {
+          // Ignore errors when stopping
+        }
+        return;
       }
+      
+      console.error('[telegram-bot] ❌ Polling error:', error);
     });
     
     console.log(`[telegram-bot] ✅ Handlers registered: @${BOT_USERNAME}`);
@@ -200,8 +256,14 @@ function setupHandlers() {
 
 // Initialize bot on module load only in development (with polling)
 // In production, bot is initialized lazily when webhook handler is called
+// Use global check to prevent multiple initializations in HMR
 if (shouldUsePolling()) {
-  getBot();
+  // Only initialize if not already initialized (prevents HMR duplicates)
+  if (!getBotInstance()) {
+    getBot();
+  } else {
+    console.log('[telegram-bot] ♻️  Bot already initialized (HMR reload detected)');
+  }
 }
 
 // Export function to send notifications
@@ -238,6 +300,10 @@ export async function sendTelegramNotification(
 export { getBot as getTelegramBot };
 export const BOT_USERNAME_EXPORT = BOT_USERNAME;
 
-// For backward compatibility, export bot (but prefer getBot in new code)
-export { bot };
+// For backward compatibility, export bot getter
+// Note: This is a getter function that returns the current bot instance
+// In development, returns the global instance; in production, the module instance
+export function getBotExport() {
+  return getBotInstance();
+}
 
