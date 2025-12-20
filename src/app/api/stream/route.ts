@@ -1,7 +1,9 @@
 import { NextRequest } from 'next/server';
 import { subscribe } from '@/lib/bus';
 import '@/lib/poller'; // ensure poller starts in this process
-import '@/lib/telegram-bot'; // ensure telegram bot is initialized
+// Note: Telegram bot is initialized lazily - no need to import here
+// In development with polling, it initializes on module load
+// In production with webhook, it initializes when webhook handler is called
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';

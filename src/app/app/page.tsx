@@ -1493,8 +1493,13 @@ export default function Home() {
                       if (!session?.user?.id) return;
                       setCheckingTelegram(true);
                       try {
-                        // Ensure bot is initialized
-                        await fetch('/api/telegram/init', { cache: 'no-store' });
+                        // In development, ensure bot is initialized (only if using polling)
+                        // In production, bot is initialized automatically via webhook
+                        if (process.env.NODE_ENV === 'development') {
+                          await fetch('/api/telegram/init', { cache: 'no-store' }).catch(() => {
+                            // Ignore errors - bot may already be initialized
+                          });
+                        }
                         
                         // Generate a secure connection token
                         const tokenRes = await fetch('/api/telegram/connect-token', {

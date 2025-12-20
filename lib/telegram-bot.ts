@@ -5,47 +5,73 @@ import clientPromise from './mongodb';
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'PM_Intel_bot';
 
-if (!BOT_TOKEN) {
-  console.warn('[telegram-bot] TELEGRAM_BOT_TOKEN not set. Telegram features will be disabled.');
-}
-
-// Initialize bot (using polling for now, can switch to webhook later)
+// Lazy initialization: bot is only created when needed
+// This prevents issues in serverless environments where module loading happens multiple times
 let bot: TelegramBot | null = null;
+let handlersInitialized = false;
 
-if (BOT_TOKEN) {
+// Determine if we should use polling (only in development, never in production)
+const shouldUsePolling = () => {
+  // Only use polling if explicitly enabled AND in development
+  // In production, always use webhooks (no polling)
+  return process.env.NODE_ENV === 'development' && process.env.TELEGRAM_USE_POLLING === 'true';
+};
+
+// Initialize bot instance (lazy, only when needed)
+function getBot(): TelegramBot | null {
+  if (!BOT_TOKEN) {
+    if (!handlersInitialized) {
+      console.warn('[telegram-bot] TELEGRAM_BOT_TOKEN not set. Telegram features will be disabled.');
+    }
+    return null;
+  }
+
+  // If bot already exists, return it
+  if (bot) {
+    return bot;
+  }
+
+  // Create bot instance (without polling in production - webhook only)
   try {
-    // Use polling for development (simpler than webhook setup)
-    // In production, you can switch to webhook by setting polling: false and using webhook endpoint
-    const usePolling = process.env.TELEGRAM_USE_POLLING === 'true' || process.env.NODE_ENV === 'development';
+    const usePolling = shouldUsePolling();
     bot = new TelegramBot(BOT_TOKEN, { polling: usePolling });
     
     if (usePolling) {
-      console.log(`[telegram-bot] Bot started with polling mode`);
+      console.log(`[telegram-bot] Bot initialized with polling mode (development only)`);
     } else {
-      console.log(`[telegram-bot] Bot started (webhook mode - use /api/telegram/webhook)`);
+      console.log(`[telegram-bot] Bot initialized (webhook mode - use /api/telegram/webhook)`);
     }
   } catch (error: any) {
     console.error('[telegram-bot] Failed to initialize bot:', error.message);
     bot = null;
+    return null;
   }
-  
-  // Set up command handlers (only if bot was successfully created)
-  // Use global flag to prevent duplicate handler registration in Next.js HMR
-  const globalAny = globalThis as any;
-  if (bot && !globalAny.__TELEGRAM_BOT_HANDLERS_SET__) {
-    globalAny.__TELEGRAM_BOT_HANDLERS_SET__ = true;
-    
-    // Log all messages for debugging (set up first)
-    bot.on('message', (msg) => {
-      console.log('[telegram-bot] 📨 Received message:', {
-        chatId: msg.chat.id,
-        text: msg.text,
-        from: msg.from?.username || msg.from?.id,
-      });
+
+  // Set up handlers only once
+  if (!handlersInitialized) {
+    setupHandlers();
+    handlersInitialized = true;
+  }
+
+  return bot;
+}
+
+// Set up bot command handlers
+function setupHandlers() {
+  const botInstance = bot;
+  if (!botInstance) return;
+
+  // Log all messages for debugging (set up first)
+  botInstance.on('message', (msg) => {
+    console.log('[telegram-bot] 📨 Received message:', {
+      chatId: msg.chat.id,
+      text: msg.text,
+      from: msg.from?.username || msg.from?.id,
     });
-    
-    // Handle /start command with token verification
-    bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
+  });
+  
+  // Handle /start command with token verification
+  botInstance.onText(/\/start(?: (.+))?/, async (msg, match) => {
       console.log('[telegram-bot] 🚀 Received /start command', { 
         chatId: msg.chat.id, 
         token: match?.[1] ? match[1].substring(0, 10) + '...' : null,
@@ -145,36 +171,37 @@ if (BOT_TOKEN) {
     });
     
     // Handle /help command
-    bot.onText(/\/help/, async (msg) => {
+    botInstance.onText(/\/help/, async (msg) => {
       const chatId = msg.chat.id;
-      await bot?.sendMessage(
+      await botInstance?.sendMessage(
         chatId,
         '🐋 PM Intel Bot Commands:\n\n' +
-        '/start <userId> - Connect your account\n' +
+        '/start <token> - Connect your account\n' +
         '/help - Show this help message\n\n' +
         'Manage your alerts and filters on the website.'
       );
     });
     
     // Handle errors
-    bot.on('error', (error) => {
+    botInstance.on('error', (error) => {
       console.error('[telegram-bot] ❌ Bot error:', error);
     });
     
-    bot.on('polling_error', (error: any) => {
+    botInstance.on('polling_error', (error: any) => {
       console.error('[telegram-bot] ❌ Polling error:', error);
-      // 409 conflict is normal when multiple instances try to poll
+      // 409 conflict is normal when multiple instances try to poll (dev only)
       if (error.message?.includes('409') || error.code === 'ETELEGRAM') {
         console.log('[telegram-bot] ⚠️  409 conflict (multiple instances - this is normal in development)');
       }
     });
     
-    console.log(`[telegram-bot] ✅ Bot initialized and handlers registered: @${BOT_USERNAME}`);
-  } else if (bot) {
-    console.log('[telegram-bot] ♻️  Handlers already registered (HMR reload)');
-  }
-} else {
-  console.warn('[telegram-bot] Bot not initialized - missing TELEGRAM_BOT_TOKEN');
+    console.log(`[telegram-bot] ✅ Handlers registered: @${BOT_USERNAME}`);
+}
+
+// Initialize bot on module load only in development (with polling)
+// In production, bot is initialized lazily when webhook handler is called
+if (shouldUsePolling()) {
+  getBot();
 }
 
 // Export function to send notifications
@@ -182,13 +209,14 @@ export async function sendTelegramNotification(
   chatId: string,
   message: string
 ): Promise<boolean> {
-  if (!bot) {
+  const botInstance = getBot();
+  if (!botInstance) {
     console.error('[telegram-bot] Bot not initialized');
     return false;
   }
   
   try {
-    await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+    await botInstance.sendMessage(chatId, message, { parse_mode: 'HTML' });
     return true;
   } catch (error: any) {
     console.error(`[telegram-bot] Error sending message to ${chatId}:`, error.message);
@@ -206,7 +234,10 @@ export async function sendTelegramNotification(
   }
 }
 
-// Export bot instance for webhook handler
-export { bot };
+// Export bot getter for webhook handler
+export { getBot as getTelegramBot };
 export const BOT_USERNAME_EXPORT = BOT_USERNAME;
+
+// For backward compatibility, export bot (but prefer getBot in new code)
+export { bot };
 
