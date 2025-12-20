@@ -81,6 +81,10 @@ def run_worker() -> None:
     all_user_filters = get_all_user_filters()
     print(f"   ✅ Loaded {len(all_user_filters)} active user filters")
     
+    # Track when filters were last reloaded
+    last_filter_reload = time.time()
+    filter_reload_interval = config.FILTER_RELOAD_INTERVAL_SECONDS
+    
     # Load last processed trade marker
     last_marker = get_last_processed_trade_marker()
     if last_marker:
@@ -88,12 +92,31 @@ def run_worker() -> None:
     else:
         print("\n📍 No previous marker - will process all new trades from now on")
     
+    print(f"\n⚙️  Filter reload interval: {filter_reload_interval}s (filters will refresh automatically)")
+    
     # Main polling loop
     poll_count = 0
     try:
         while True:
             poll_count += 1
             print(f"\n📊 Poll #{poll_count} - Fetching trades...")
+            
+            # Reload user filters periodically to pick up changes
+            current_time = time.time()
+            if current_time - last_filter_reload >= filter_reload_interval:
+                print("   🔄 Reloading user filters (checking for updates)...")
+                try:
+                    new_filters = get_all_user_filters()
+                    old_count = len(all_user_filters)
+                    new_count = len(new_filters)
+                    all_user_filters = new_filters
+                    last_filter_reload = current_time
+                    if new_count != old_count:
+                        print(f"   ✅ Filters updated: {old_count} → {new_count} active filters")
+                    else:
+                        print(f"   ✅ Filters refreshed: {new_count} active filters (no changes)")
+                except Exception as e:
+                    print(f"   ⚠️  Failed to reload filters: {e} (using cached filters)")
             
             try:
                 # Fetch recent trades from Data API
