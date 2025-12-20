@@ -11,6 +11,9 @@ from whale_worker.db import (
     get_or_cache_sports_tag_ids,
     get_or_cache_tags_dictionary,
     get_all_user_filters,
+    mark_trade_as_processed,
+    is_trade_processed,
+    ensure_processed_trades_ttl_index,
 )
 from whale_worker.polymarket_client import (
     fetch_recent_trades,
@@ -50,6 +53,9 @@ def run_worker() -> None:
         # Test connection
         db.command('ping')
         print("✅ Connected to MongoDB")
+        
+        # Ensure TTL index exists for processed trades deduplication
+        ensure_processed_trades_ttl_index()
     except Exception as e:
         print(f"❌ Failed to connect to MongoDB: {e}")
         raise
@@ -130,22 +136,43 @@ def run_worker() -> None:
                 if len(trades) == 0:
                     print("   No new trades found")
                 else:
-                    # Filter out trades we've already processed (by tx hash)
+                    # Filter out trades we've already processed
+                    # Strategy:
+                    # 1. Use cursor (last_processed_tx_hash) to skip trades we've seen
+                    # 2. Use deduplication set to prevent re-processing same tx_hash
+                    #    (handles edge cases: same timestamp, restart scenarios)
                     new_trades = []
+                    seen_cursor = False
+                    
                     if last_marker and last_marker.last_processed_tx_hash:
                         for trade in trades:
-                            if trade.transaction_hash != last_marker.last_processed_tx_hash:
-                                new_trades.append(trade)
-                            else:
-                                # Found the last processed trade, stop here
+                            # Stop when we reach the last processed trade (cursor)
+                            if trade.transaction_hash == last_marker.last_processed_tx_hash:
+                                seen_cursor = True
                                 break
+                            
+                            # Skip if already processed (deduplication set)
+                            if is_trade_processed(trade.transaction_hash):
+                                continue
+                            
+                            new_trades.append(trade)
                     else:
-                        new_trades = trades
+                        # No cursor yet - check deduplication set for all trades
+                        for trade in trades:
+                            if not is_trade_processed(trade.transaction_hash):
+                                new_trades.append(trade)
                     
-                    print(f"   Found {len(new_trades)} new trades to process")
+                    if last_marker and last_marker.last_processed_tx_hash and not seen_cursor:
+                        print(f"   ⚠️  Warning: Last processed trade not found in API response (may have been filtered out)")
+                    
+                    print(f"   Found {len(new_trades)} new trades to process (after deduplication)")
                     
                     # Process each new trade
                     for i, trade in enumerate(new_trades, 1):
+                        # Mark as processed immediately to prevent duplicate processing
+                        # (even if processing fails later, we don't want to retry immediately)
+                        mark_trade_as_processed(trade.transaction_hash)
+                        
                         notional = trade.notional
                         
                         # Step 2: Fetch market metadata (with caching)

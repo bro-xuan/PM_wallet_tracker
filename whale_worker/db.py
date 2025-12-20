@@ -172,6 +172,87 @@ def set_last_processed_trade_marker(marker: TradeMarker) -> None:
     )
 
 
+def mark_trade_as_processed(tx_hash: str, ttl_minutes: int = 15) -> None:
+    """
+    Mark a trade as processed in the deduplication set.
+    
+    This creates a TTL-indexed document that will be automatically deleted
+    after the TTL expires. This prevents re-processing the same trade
+    even if the cursor is reset or there are timestamp collisions.
+    
+    Args:
+        tx_hash: Transaction hash of the processed trade.
+        ttl_minutes: TTL in minutes (default: 15 minutes).
+    """
+    db = get_db()
+    processed_trades_collection = db.collection('processedTrades')
+    
+    # Create document with TTL
+    expires_at = datetime.utcnow() + timedelta(minutes=ttl_minutes)
+    
+    processed_trades_collection.update_one(
+        { 'txHash': tx_hash },
+        {
+            '$set': {
+                'txHash': tx_hash,
+                'processedAt': datetime.utcnow(),
+                'expiresAt': expires_at,
+            },
+            '$setOnInsert': {
+                'createdAt': datetime.utcnow(),
+            },
+        },
+        upsert=True
+    )
+
+
+def is_trade_processed(tx_hash: str) -> bool:
+    """
+    Check if a trade has already been processed.
+    
+    Args:
+        tx_hash: Transaction hash to check.
+        
+    Returns:
+        True if trade has been processed (and not expired), False otherwise.
+    """
+    db = get_db()
+    processed_trades_collection = db.collection('processedTrades')
+    
+    # Check if trade exists and hasn't expired
+    doc = processed_trades_collection.find_one({
+        'txHash': tx_hash,
+        'expiresAt': { '$gt': datetime.utcnow() }
+    })
+    
+    return doc is not None
+
+
+def ensure_processed_trades_ttl_index() -> None:
+    """
+    Ensure TTL index exists on processedTrades collection.
+    
+    This should be called once at startup to create the index
+    that automatically deletes expired documents.
+    """
+    db = get_db()
+    processed_trades_collection = db.collection('processedTrades')
+    
+    # Create TTL index on expiresAt field (if it doesn't exist)
+    # MongoDB will automatically delete documents after expiresAt
+    try:
+        processed_trades_collection.create_index(
+            'expiresAt',
+            expireAfterSeconds=0,  # Delete immediately when expiresAt is reached
+            name='ttl_index_expiresAt'
+        )
+        print("   ✅ Created TTL index on processedTrades collection")
+    except Exception as e:
+        # Index might already exist, which is fine
+        if 'already exists' not in str(e).lower():
+            print(f"   ⚠️  Could not create TTL index: {e}")
+
+
 def get_or_upsert_market(condition_id: str, market_metadata: Optional[MarketMetadata] = None) -> Optional[MarketMetadata]:
     """
     Get market metadata from cache/DB, or fetch and store if not exists.
