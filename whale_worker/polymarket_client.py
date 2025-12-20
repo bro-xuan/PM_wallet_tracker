@@ -220,6 +220,141 @@ def fetch_tags_dictionary() -> Dict[str, Dict]:
         return {}
 
 
+def fetch_market_metadata_batch(
+    condition_ids: List[str],
+    sports_tag_ids: Set[str],
+    tags_dict: Dict[str, Dict]
+) -> Dict[str, MarketMetadata]:
+    """
+    Fetch market metadata for multiple condition IDs in a single API call.
+    
+    This is more efficient than fetching one at a time, especially during bursts
+    when many new markets appear. Reduces network calls from N to 1.
+    
+    Args:
+        condition_ids: List of Polymarket condition IDs to fetch.
+        sports_tag_ids: A set of tag IDs that identify sports markets.
+        tags_dict: A dictionary mapping tag IDs to their full metadata.
+    
+    Returns:
+        Dictionary mapping condition_id -> MarketMetadata (only for found markets).
+        
+    API Endpoint:
+        GET https://gamma-api.polymarket.com/markets
+        ?condition_ids={condition_id1,condition_id2,...}
+        &include_tag=true
+        &closed=false
+        &limit=100
+    """
+    if not condition_ids:
+        return {}
+    
+    config = Config.get_config()
+    gamma_api_url = config.POLYMARKET_GAMMA_API_URL
+    
+    # Gamma API accepts comma-separated condition_ids
+    condition_ids_str = ','.join(condition_ids)
+    
+    url = f"{gamma_api_url}/markets"
+    params = {
+        "condition_ids": condition_ids_str,
+        "include_tag": "true",
+        "closed": "false",
+        "limit": str(len(condition_ids)),  # Request all we need
+    }
+    
+    results = {}
+    
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.get(url, params=params)
+            response.raise_for_status()
+            markets = response.json()
+        
+        # Process each market in the response
+        for market in markets:
+            condition_id = market.get("conditionId") or market.get("id")
+            if not condition_id:
+                continue
+            
+            # Extract fields from Gamma API response
+            title = market.get("question") or market.get("title") or market.get("name") or "Unknown Market"
+            slug = market.get("slug")
+            description = market.get("description")
+            image_url = market.get("image") or market.get("imageUrl")
+            
+            # Extract raw tag IDs and tag labels
+            market_tag_ids: List[str] = []
+            market_tag_labels: List[str] = []
+            raw_tags = market.get("tags", [])
+            
+            for tag_obj in raw_tags:
+                if isinstance(tag_obj, dict):
+                    tag_id = str(tag_obj.get("id", ""))
+                    if tag_id:
+                        market_tag_ids.append(tag_id)
+                        # Use label from tags_dict if available, otherwise from tag_obj
+                        market_tag_labels.append(
+                            tags_dict.get(tag_id, {}).get("label", 
+                                tag_obj.get("label", tag_obj.get("slug", tag_id)))
+                        )
+                elif isinstance(tag_obj, str):
+                    # Fallback for string tags
+                    market_tag_labels.append(tag_obj)
+            
+            # Determine if it's a sports market
+            is_sports = bool(sports_tag_ids.intersection(set(market_tag_ids)))
+            
+            # Infer a primary category from tags if not explicitly provided
+            inferred_category = None
+            if market_tag_labels:
+                tag_labels_lower = [label.lower() for label in market_tag_labels]
+                
+                if is_sports:
+                    inferred_category = "sports"
+                elif any(kw in " ".join(tag_labels_lower) for kw in ["politics", "election", "president", "congress", "senate", "house"]):
+                    inferred_category = "politics"
+                elif any(kw in " ".join(tag_labels_lower) for kw in ["crypto", "bitcoin", "ethereum", "blockchain", "btc", "eth"]):
+                    inferred_category = "crypto"
+                elif any(kw in " ".join(tag_labels_lower) for kw in ["entertainment", "movie", "tv", "celebrity", "culture"]):
+                    inferred_category = "culture"
+            
+            metadata = MarketMetadata(
+                condition_id=condition_id,
+                title=title,
+                slug=slug,
+                description=description,
+                image_url=image_url,
+                category=inferred_category,
+                subcategory=market.get("subcategory"),
+                tags=market_tag_labels,
+                tag_ids=market_tag_ids,
+                is_sports=is_sports,
+            )
+            
+            results[condition_id] = metadata
+        
+        return results
+        
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            # No markets found - return empty dict
+            return {}
+        print(f"❌ Error fetching market metadata batch: HTTP {e.response.status_code}")
+        try:
+            error_body = e.response.json()
+            print(f"   Error details: {error_body}")
+        except:
+            print(f"   Response: {e.response.text[:200]}")
+        return {}
+    except httpx.TimeoutException:
+        print(f"❌ Timeout fetching market metadata batch")
+        return {}
+    except Exception as e:
+        print(f"❌ Error fetching market metadata batch: {e}")
+        return {}
+
+
 def fetch_market_metadata(
     condition_id: str,
     sports_tag_ids: Optional[Set[str]] = None,

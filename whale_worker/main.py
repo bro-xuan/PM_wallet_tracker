@@ -18,6 +18,7 @@ from whale_worker.db import (
 from whale_worker.polymarket_client import (
     fetch_recent_trades,
     fetch_market_metadata,
+    fetch_market_metadata_batch,
     fetch_sports_tag_ids,
     fetch_tags_dictionary,
 )
@@ -167,7 +168,38 @@ def run_worker() -> None:
                     
                     print(f"   Found {len(new_trades)} new trades to process (after deduplication)")
                     
-                    # Process each new trade
+                    # OPTIMIZATION: Batch fetch market metadata for all missing markets
+                    # Step 1: Collect all condition_ids that need metadata
+                    missing_condition_ids = []
+                    condition_id_to_trades = {}  # Map condition_id -> list of trades
+                    
+                    for trade in new_trades:
+                        if trade.condition_id:
+                            # Check cache first
+                            cached_market = get_or_upsert_market(trade.condition_id)
+                            if not cached_market:
+                                # Not in cache - add to batch fetch list
+                                if trade.condition_id not in condition_id_to_trades:
+                                    missing_condition_ids.append(trade.condition_id)
+                                    condition_id_to_trades[trade.condition_id] = []
+                                condition_id_to_trades[trade.condition_id].append(trade)
+                    
+                    # Step 2: Batch fetch all missing markets in one API call
+                    if missing_condition_ids:
+                        print(f"   📦 Batch fetching metadata for {len(missing_condition_ids)} markets...")
+                        batch_metadata = fetch_market_metadata_batch(
+                            missing_condition_ids,
+                            sports_tag_ids=sports_tag_ids,
+                            tags_dict=tags_dict
+                        )
+                        
+                        # Step 3: Store all fetched markets in cache
+                        for condition_id, metadata in batch_metadata.items():
+                            get_or_upsert_market(condition_id, metadata)
+                        
+                        print(f"   ✅ Fetched {len(batch_metadata)}/{len(missing_condition_ids)} markets")
+                    
+                    # Step 4: Process each new trade (markets are now in cache)
                     for i, trade in enumerate(new_trades, 1):
                         # Mark as processed immediately to prevent duplicate processing
                         # (even if processing fails later, we don't want to retry immediately)
@@ -175,24 +207,11 @@ def run_worker() -> None:
                         
                         notional = trade.notional
                         
-                        # Step 2: Fetch market metadata (with caching)
-                        # Step 3: Categorize market using sports tag IDs and tags dictionary
+                        # Step 5: Get market metadata (now from cache or batch fetch)
                         market = None
                         if trade.condition_id:
-                            # Check cache first
+                            # Get from cache (should be there now after batch fetch)
                             market = get_or_upsert_market(trade.condition_id)
-                            
-                            # If not in cache, fetch from Gamma API with categorization
-                            if not market:
-                                market = fetch_market_metadata(
-                                    trade.condition_id,
-                                    sports_tag_ids=sports_tag_ids,
-                                    tags_dict=tags_dict
-                                )
-                                
-                                # Store in cache
-                                if market:
-                                    get_or_upsert_market(trade.condition_id, market)
                             
                             # Log trade with market info and categorization
                             if market:
