@@ -44,20 +44,20 @@ if (BOT_TOKEN) {
       });
     });
     
-    // Handle /start command
+    // Handle /start command with token verification
     bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
       console.log('[telegram-bot] 🚀 Received /start command', { 
         chatId: msg.chat.id, 
-        userId: match?.[1],
+        token: match?.[1] ? match[1].substring(0, 10) + '...' : null,
         from: msg.from?.username || msg.from?.id,
       });
       
       const chatId = msg.chat.id;
       const username = msg.from?.username || null;
-      const userId = match?.[1]; // Extract userId from /start <userId>
+      const token = match?.[1]; // Extract token from /start <token>
       
-      if (!userId) {
-        console.log('[telegram-bot] ⚠️ /start without userId');
+      if (!token) {
+        console.log('[telegram-bot] ⚠️ /start without token');
         await bot?.sendMessage(chatId, 
           'Welcome to PM Intel Bot! 🐋\n\n' +
           'To connect your account, please use the connection link from the website.'
@@ -65,12 +65,41 @@ if (BOT_TOKEN) {
         return;
       }
       
-      console.log(`[telegram-bot] 🔗 Processing connection for userId: ${userId}, chatId: ${chatId}`);
+      console.log(`[telegram-bot] 🔗 Processing connection with token, chatId: ${chatId}`);
       
       try {
-        // Store connection in MongoDB
+        // Verify token in MongoDB
         const client = await clientPromise;
         const db = client.db(process.env.MONGODB_DB_NAME || 'pm-wallet-tracker');
+        const tokensCollection = db.collection('telegramConnectTokens');
+        
+        // Find token and verify it's valid
+        const tokenDoc = await tokensCollection.findOne({
+          token: token,
+          used: false,
+          expiresAt: { $gt: new Date() }, // Not expired
+        });
+        
+        if (!tokenDoc) {
+          console.log('[telegram-bot] ❌ Invalid or expired token');
+          await bot?.sendMessage(
+            chatId,
+            '❌ Invalid or expired connection link.\n\n' +
+            'Please go back to the website and click "Connect Telegram" again to get a new link.'
+          );
+          return;
+        }
+        
+        const userId = tokenDoc.userId;
+        console.log(`[telegram-bot] ✅ Token verified for userId: ${userId}, chatId: ${chatId}`);
+        
+        // Mark token as used
+        await tokensCollection.updateOne(
+          { token: token },
+          { $set: { used: true, usedAt: new Date() } }
+        );
+        
+        // Store connection in MongoDB
         const telegramAccountsCollection = db.collection('telegramAccounts');
         
         // Upsert connection

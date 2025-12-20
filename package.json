@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "dev:worker": "python -m whale_worker.main"
   },
   "dependencies": {
     "@auth/mongodb-adapter": "^3.11.1",

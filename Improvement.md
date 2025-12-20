@@ -25,3 +25,4 @@ Retire SQLite completely for production, or keep it only as a local cache / dev 
 Track wallet categorization
 -----
 
+From checking telegram connection: Use polling mode in development (or webhook in production)

@@ -45,3 +45,52 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Whale Worker (Python)
+
+The whale trades alert system uses a separate Python background worker (`whale_worker/`) that monitors all Polymarket trades and sends Telegram notifications to users when trades match their configured filters.
+
+### Architecture
+
+- **Frontend (Next.js)**: Users configure their alert filters (notional, price range, sides) and connect their Telegram accounts
+- **Backend (Next.js API)**: Stores user configurations and Telegram connections in MongoDB
+- **Worker (Python)**: Continuously polls Polymarket API for new trades, matches them against user filters, and sends Telegram notifications
+
+The worker runs independently from the Next.js application and can be deployed as a separate service or background job.
+
+### Setup
+
+1. Install Python dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Ensure environment variables are set in `.env.local`:
+   - `MONGODB_URI` - MongoDB connection string
+   - `MONGODB_DB_NAME` - Database name
+   - `TELEGRAM_BOT_TOKEN` - Telegram bot token
+   - `POLL_INTERVAL_SECONDS` - Polling interval (default: 10 seconds)
+
+3. Run the worker in development:
+   ```bash
+   npm run dev:worker
+   # or directly:
+   python -m whale_worker.main
+   ```
+
+### Development Status
+
+The worker is currently scaffolded with stub implementations. Each module contains:
+- Function/class definitions with proper signatures
+- Docstrings explaining purpose and parameters
+- TODO comments indicating what needs to be implemented
+- `NotImplementedError` or `pass` placeholders
+
+Modules:
+- `config.py` - Environment variable loading
+- `db.py` - MongoDB helpers for filters, cursors, and user data
+- `polymarket_client.py` - Polymarket Data API and Gamma API clients
+- `filters.py` - Trade matching logic against user filters
+- `notifications.py` - Telegram message formatting and sending
+- `main.py` - Main worker loop orchestration
+- `types.py` - Type definitions and dataclasses

@@ -117,6 +117,8 @@ export default function Home() {
     minPrice: 0.05,
     maxPrice: 0.95,
     sides: ['BUY', 'SELL'] as ('BUY' | 'SELL')[],
+    excludeCategories: [] as string[],
+    categoryFilter: [] as string[], // Tag IDs to include
     enabled: false,
   });
   const [configLoading, setConfigLoading] = useState(false);
@@ -277,7 +279,7 @@ export default function Home() {
   useEffect(() => {
     if (sessionStatus === 'loading') return; // Wait for session to load
     if (session) {
-      syncWalletsAndTrades();
+    syncWalletsAndTrades();
     } else {
       // Clear data when not authenticated
       setWallets([]);
@@ -292,6 +294,34 @@ export default function Home() {
       tableContainerRef.current.scrollTop = 0;
     }
   }, [currentPage]);
+
+  // Fetch whale alert config when Telegram is connected
+  useEffect(() => {
+    if (!session?.user?.id || !telegramConnected) return;
+    
+    const fetchConfig = async () => {
+      try {
+        const res = await fetch('/api/whale-alerts/config', { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          setAlertConfig(prev => ({
+            ...prev,
+            minNotionalUsd: data.minNotionalUsd ?? prev.minNotionalUsd,
+            minPrice: data.minPrice ?? prev.minPrice,
+            maxPrice: data.maxPrice ?? prev.maxPrice,
+            sides: data.sides ?? prev.sides,
+            excludeCategories: data.excludeCategories ?? prev.excludeCategories,
+            categoryFilter: data.categoryFilter ?? prev.categoryFilter,
+            enabled: data.enabled ?? prev.enabled,
+          }));
+        }
+      } catch (error) {
+        console.error('Failed to fetch whale alert config:', error);
+      }
+    };
+    
+    fetchConfig();
+  }, [session, telegramConnected]);
 
   // reset to page 0 when page size changes
   useEffect(() => {
@@ -413,16 +443,16 @@ export default function Home() {
       }
       
       // Update local state
-      setLabels(prev => {
-        const copy = { ...prev };
-        const key = addr.toLowerCase();
-        if (!trimmed) {
-          delete copy[key];
-        } else {
-          copy[key] = trimmed;
-        }
-        return copy;
-      });
+    setLabels(prev => {
+      const copy = { ...prev };
+      const key = addr.toLowerCase();
+      if (!trimmed) {
+        delete copy[key];
+      } else {
+        copy[key] = trimmed;
+      }
+      return copy;
+    });
     } catch (error: any) {
       console.error('Failed to update label:', error);
       alert(error.message || 'Failed to update label');
@@ -1462,28 +1492,49 @@ export default function Home() {
                     onClick={async () => {
                       if (!session?.user?.id) return;
                       setCheckingTelegram(true);
-                      // Ensure bot is initialized
-                      await fetch('/api/telegram/init', { cache: 'no-store' });
-                      // Open Telegram with deep link
-                      const telegramUrl = `https://t.me/PM_Intel_bot?start=${session.user.id}`;
-                      window.open(telegramUrl, '_blank');
-                      // Poll for connection status
-                      let attempts = 0;
-                      const maxAttempts = 30; // 30 seconds
-                      const pollInterval = setInterval(async () => {
-                        attempts++;
-                        const res = await fetch('/api/telegram/status', { cache: 'no-store' });
-                        const data = await res.json();
-                        if (data.connected) {
-                          setTelegramConnected(true);
-                          setTelegramUsername(data.username);
-                          clearInterval(pollInterval);
-                          setCheckingTelegram(false);
-                        } else if (attempts >= maxAttempts) {
-                          clearInterval(pollInterval);
-                          setCheckingTelegram(false);
+                      try {
+                        // Ensure bot is initialized
+                        await fetch('/api/telegram/init', { cache: 'no-store' });
+                        
+                        // Generate a secure connection token
+                        const tokenRes = await fetch('/api/telegram/connect-token', {
+                          method: 'POST',
+                          cache: 'no-store',
+                        });
+                        
+                        if (!tokenRes.ok) {
+                          throw new Error('Failed to generate connection token');
                         }
-                      }, 1000);
+                        
+                        const { token } = await tokenRes.json();
+                        
+                        // Open Telegram with deep link using token
+                        const telegramUrl = `https://t.me/PM_Intel_bot?start=${token}`;
+                        window.open(telegramUrl, '_blank');
+                        
+                        // Poll for connection status
+                        let attempts = 0;
+                        const maxAttempts = 30; // 30 seconds (token expires in 5 minutes, but poll for 30s)
+                        const pollInterval = setInterval(async () => {
+                          attempts++;
+                          const res = await fetch('/api/telegram/status', { cache: 'no-store' });
+                          const data = await res.json();
+                          if (data.connected) {
+                            setTelegramConnected(true);
+                            setTelegramUsername(data.username);
+                            clearInterval(pollInterval);
+                            setCheckingTelegram(false);
+                          } else if (attempts >= maxAttempts) {
+                            clearInterval(pollInterval);
+                            setCheckingTelegram(false);
+                            alert('Connection timeout. Please try again or check if you clicked "Start" in Telegram.');
+                          }
+                        }, 1000);
+                      } catch (error: any) {
+                        console.error('Failed to connect Telegram:', error);
+                        alert('Failed to generate connection link. Please try again.');
+                        setCheckingTelegram(false);
+                      }
                     }}
                     disabled={checkingTelegram}
                     style={{
@@ -1524,8 +1575,8 @@ export default function Home() {
                         <span style={{color:'var(--good)', fontSize:20}}>✅</span>
                       </div>
                     </div>
-                    <button
-                      type="button"
+                  <button
+                    type="button"
                       onClick={async () => {
                         if (!confirm('Disconnect Telegram account?')) return;
                         try {
@@ -1535,10 +1586,10 @@ export default function Home() {
                         } catch (error) {
                           console.error('Failed to disconnect:', error);
                         }
-                      }}
-                      style={{
+                    }}
+                    style={{
                         padding:'6px 12px',
-                        background:'transparent',
+                      background:'transparent',
                         color:'var(--bad)',
                         border:'1px solid var(--line)',
                         borderRadius:6,
@@ -1577,7 +1628,7 @@ export default function Home() {
                             borderRadius:6,
                             border:'1px solid var(--line)',
                             background:'var(--bg)',
-                            color:'var(--ink)',
+                      color:'var(--ink)',
                             fontSize:14
                           }}
                         />
@@ -1605,7 +1656,7 @@ export default function Home() {
                               flex:1,
                               padding:'8px 12px',
                               borderRadius:6,
-                              border:'1px solid var(--line)',
+                      border:'1px solid var(--line)',
                               background:'var(--bg)',
                               color:'var(--ink)',
                               fontSize:14
@@ -1679,6 +1730,88 @@ export default function Home() {
                         </div>
                       </div>
 
+                      {/* Exclude Categories */}
+                      <div>
+                        <label style={{display:'block', fontSize:14, marginBottom:8, color:'var(--ink)'}}>
+                          Exclude Categories
+                        </label>
+                        <div style={{display:'flex', gap:12, flexWrap:'wrap'}}>
+                          <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer'}}>
+                            <input
+                              type="checkbox"
+                              checked={alertConfig.excludeCategories.includes('sports')}
+                              onChange={e => {
+                                if (e.target.checked) {
+                                  setAlertConfig(prev => ({...prev, excludeCategories: [...prev.excludeCategories, 'sports']}));
+                                } else {
+                                  setAlertConfig(prev => ({...prev, excludeCategories: prev.excludeCategories.filter(c => c !== 'sports')}));
+                                }
+                              }}
+                            />
+                            <span>Sports</span>
+                          </label>
+                          <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer'}}>
+                            <input
+                              type="checkbox"
+                              checked={alertConfig.excludeCategories.includes('politics')}
+                              onChange={e => {
+                                if (e.target.checked) {
+                                  setAlertConfig(prev => ({...prev, excludeCategories: [...prev.excludeCategories, 'politics']}));
+                                } else {
+                                  setAlertConfig(prev => ({...prev, excludeCategories: prev.excludeCategories.filter(c => c !== 'politics')}));
+                                }
+                              }}
+                            />
+                            <span>Politics</span>
+                          </label>
+                          <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer'}}>
+                            <input
+                              type="checkbox"
+                              checked={alertConfig.excludeCategories.includes('crypto')}
+                              onChange={e => {
+                                if (e.target.checked) {
+                                  setAlertConfig(prev => ({...prev, excludeCategories: [...prev.excludeCategories, 'crypto']}));
+                                } else {
+                                  setAlertConfig(prev => ({...prev, excludeCategories: prev.excludeCategories.filter(c => c !== 'crypto')}));
+                                }
+                              }}
+                            />
+                            <span>Crypto</span>
+                          </label>
+                        </div>
+                        <div style={{fontSize:12, color:'var(--muted)', marginTop:4}}>
+                          Exclude trades from these categories
+                        </div>
+                      </div>
+
+                      {/* Category Filter (Tag IDs) - Advanced */}
+                      <div>
+                        <label style={{display:'block', fontSize:14, marginBottom:8, color:'var(--ink)'}}>
+                          Include Only Tag IDs (Advanced)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Comma-separated tag IDs (e.g., 766, 21, 235)"
+                          value={alertConfig.categoryFilter.join(', ')}
+                          onChange={e => {
+                            const tags = e.target.value.split(',').map(t => t.trim()).filter(t => t && t.length > 0);
+                            setAlertConfig(prev => ({...prev, categoryFilter: tags}));
+                          }}
+                          style={{
+                            width:'100%',
+                            padding:'8px 12px',
+                            borderRadius:6,
+                            border:'1px solid var(--line)',
+                            background:'var(--bg)',
+                            color:'var(--ink)',
+                            fontSize:14
+                          }}
+                        />
+                        <div style={{fontSize:12, color:'var(--muted)', marginTop:4}}>
+                          Only show trades with these tag IDs (leave empty for all)
+                        </div>
+                      </div>
+
                       {/* Enabled Toggle */}
                       <div style={{display:'flex', alignItems:'center', justifyContent:'space-between'}}>
                         <label style={{fontSize:14, color:'var(--ink)', cursor:'pointer'}}>
@@ -1703,17 +1836,39 @@ export default function Home() {
                         }
                         setConfigLoading(true);
                         try {
+                          console.log('Saving config:', alertConfig);
                           const res = await fetch('/api/whale-alerts/config', {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(alertConfig),
                             cache: 'no-store',
                           });
-                          if (!res.ok) throw new Error('Failed to save config');
-                          alert('Settings saved successfully!');
-                        } catch (error) {
+                          
+                          console.log('Response status:', res.status, res.statusText);
+                          
+                          // Parse JSON once (can only read response body once)
+                          let data;
+                          try {
+                            data = await res.json();
+                          } catch (parseError) {
+                            // If JSON parsing fails, throw with status text
+                            throw new Error(`HTTP ${res.status}: ${res.statusText || 'Failed to save config'}`);
+                          }
+                          
+                          if (!res.ok) {
+                            const errorMessage = data?.error || data?.details || data?.message || `HTTP ${res.status}: Failed to save config`;
+                            console.error('API Error Response:', data);
+                            throw new Error(errorMessage);
+                          }
+                          
+                          if (data.success) {
+                            alert('Settings saved successfully!');
+                          } else {
+                            throw new Error('Save operation did not succeed');
+                          }
+                        } catch (error: any) {
                           console.error('Failed to save config:', error);
-                          alert('Failed to save settings');
+                          alert(`Failed to save settings: ${error.message || 'Unknown error'}`);
                         } finally {
                           setConfigLoading(false);
                         }
@@ -1726,14 +1881,14 @@ export default function Home() {
                         background:configLoading || alertConfig.sides.length === 0 ? 'var(--muted)' : '#4b6bff',
                         color:'#fff',
                         border:'none',
-                        borderRadius:8,
+                      borderRadius:8,
                         cursor:configLoading || alertConfig.sides.length === 0 ? 'not-allowed' : 'pointer',
-                        fontSize:16,
+                      fontSize:16,
                         fontWeight:600
-                      }}
-                    >
+                    }}
+                  >
                       {configLoading ? 'Saving...' : 'Save Settings'}
-                    </button>
+                  </button>
                   </div>
                   
                   {/* Test Notification Button */}
