@@ -119,6 +119,7 @@ def run_worker() -> None:
             poll_count += 1
             print(f"\n📊 Poll #{poll_count} - Fetching trades...")
             
+            # CRITICAL: Reload filters BEFORE fetching trades to ensure we use latest settings
             # Check if filters should be reloaded (immediate signal or periodic interval)
             current_time = time.time()
             should_reload = False
@@ -167,6 +168,10 @@ def run_worker() -> None:
                     
                     if filters_changed:
                         print(f"   ✅ Filters updated: {old_count} → {new_count} active filters (values changed)")
+                        # Log the new filter values for debugging
+                        if all_user_filters:
+                            uf = all_user_filters[0]
+                            print(f"      New minNotional: ${uf.min_notional_usd:,.2f}, Price: {uf.min_price:.1%}-{uf.max_price:.1%}")
                     elif new_count != old_count:
                         print(f"   ✅ Filters updated: {old_count} → {new_count} active filters")
                     else:
