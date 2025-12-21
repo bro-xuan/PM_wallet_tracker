@@ -49,11 +49,20 @@ def trade_matches_user_filter(
         return False
     
     # 4. Check selected categories (NEW - preferred method)
+    # Note: Empty selected_categories means "all categories allowed" (no filtering)
     if user_filter.selected_categories:
         # Load market categories
         market_categories = market.categories or []
+        
+        # If market has no categories, we can't match - filter it out
+        if not market_categories:
+            # Market has no categories (might be old cached market or uncategorized)
+            # Since user selected specific categories, we can't match an uncategorized market
+            return False
+        
         # Require intersection: at least one selected category must be in market categories
-        if not any(cat in market_categories for cat in user_filter.selected_categories):
+        has_intersection = any(cat in market_categories for cat in user_filter.selected_categories)
+        if not has_intersection:
             return False
     
     # Legacy: Check exclude categories (for backward compatibility)
@@ -165,11 +174,20 @@ def aggregated_trade_matches_user_filter(
         return False
     
     # 4. Check selected categories (NEW - preferred method)
+    # Note: Empty selected_categories means "all categories allowed" (no filtering)
     if user_filter.selected_categories:
         # Load market categories
         market_categories = market.categories or []
+        
+        # If market has no categories, we can't match - filter it out
+        if not market_categories:
+            # Market has no categories (might be old cached market or uncategorized)
+            # Since user selected specific categories, we can't match an uncategorized market
+            return False
+        
         # Require intersection: at least one selected category must be in market categories
-        if not any(cat in market_categories for cat in user_filter.selected_categories):
+        has_intersection = any(cat in market_categories for cat in user_filter.selected_categories)
+        if not has_intersection:
             return False
     
     # Legacy: Check exclude categories (for backward compatibility)

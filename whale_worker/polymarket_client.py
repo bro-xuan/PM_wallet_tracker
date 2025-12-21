@@ -247,7 +247,8 @@ def fetch_tags_dictionary() -> Dict[str, Dict]:
     
     try:
         with httpx.Client(timeout=30.0) as client:
-            response = client.get(url)
+            # Request with limit=1000 to get more tags (API returns 300 with limit, 100 without)
+            response = client.get(url, params={"limit": "1000"})
             response.raise_for_status()
             tags = response.json()
         

@@ -364,28 +364,30 @@ def get_or_upsert_market(condition_id: str, market_metadata: Optional[MarketMeta
         # Check if cache is still valid (default TTL: 24 hours)
         cache_ttl_hours = 24
         updated_at = cached.get('updatedAt')
+        cache_valid = False
+        
         if updated_at:
             if isinstance(updated_at, datetime):
                 age = datetime.utcnow() - updated_at
-                if age < timedelta(hours=cache_ttl_hours):
-                    # Cache is valid, return cached metadata
-                    return MarketMetadata(
-                        condition_id=condition_id,
-                        title=cached.get('title', 'Unknown Market'),
-                        slug=cached.get('slug'),
-                        description=cached.get('description'),
-                        image_url=cached.get('imageUrl'),
-                        category=cached.get('category'),
-                        subcategory=cached.get('subcategory'),
-                        tags=cached.get('tags', []),
-                        tag_ids=cached.get('tagIds', []),
-                        is_sports=cached.get('isSports', False),
-                        categories=cached.get('categories', []),
-                    )
+                cache_valid = age < timedelta(hours=cache_ttl_hours)
             else:
                 # Handle case where updatedAt might be a string
                 # If it's not a datetime, assume cache is valid (for now)
-                return MarketMetadata(
+                cache_valid = True
+        
+        if cache_valid:
+            # Load cached metadata
+            cached_categories = cached.get('categories', [])
+            cached_tag_ids = cached.get('tagIds', [])
+            
+            # If categories are missing but we have tag_ids, re-derive categories
+            # This handles old cached markets that were created before categories were added
+            if not cached_categories and cached_tag_ids:
+                from whale_worker.categorization import derive_categories_for_market
+                from whale_worker.db import get_or_cache_tags_dictionary, get_or_cache_sports_tag_ids
+                
+                # Create temporary MarketMetadata to derive categories
+                temp_metadata = MarketMetadata(
                     condition_id=condition_id,
                     title=cached.get('title', 'Unknown Market'),
                     slug=cached.get('slug'),
@@ -394,10 +396,35 @@ def get_or_upsert_market(condition_id: str, market_metadata: Optional[MarketMeta
                     category=cached.get('category'),
                     subcategory=cached.get('subcategory'),
                     tags=cached.get('tags', []),
-                    tag_ids=cached.get('tagIds', []),
+                    tag_ids=cached_tag_ids,
                     is_sports=cached.get('isSports', False),
-                    categories=cached.get('categories', []),
                 )
+                
+                # Derive categories
+                categories = derive_categories_for_market(temp_metadata, db)
+                
+                # Update cache with categories
+                markets_collection.update_one(
+                    { 'conditionId': condition_id },
+                    { '$set': { 'categories': categories } }
+                )
+                
+                cached_categories = categories
+            
+            # Return cached metadata with categories
+            return MarketMetadata(
+                condition_id=condition_id,
+                title=cached.get('title', 'Unknown Market'),
+                slug=cached.get('slug'),
+                description=cached.get('description'),
+                image_url=cached.get('imageUrl'),
+                category=cached.get('category'),
+                subcategory=cached.get('subcategory'),
+                tags=cached.get('tags', []),
+                tag_ids=cached.get('tagIds', []),
+                is_sports=cached.get('isSports', False),
+                categories=cached_categories,
+            )
     
     # Not in cache or cache expired - store if metadata provided
     if market_metadata:
