@@ -295,6 +295,41 @@ export default function Home() {
     }
   }, [currentPage]);
 
+  // Check Telegram connection status on mount and when session changes
+  useEffect(() => {
+    async function checkTelegramStatus() {
+      if (!session?.user?.id) {
+        setTelegramConnected(false);
+        setTelegramUsername(null);
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/telegram/status', { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.connected) {
+            setTelegramConnected(true);
+            setTelegramUsername(data.username);
+          } else {
+            setTelegramConnected(false);
+            setTelegramUsername(null);
+          }
+        } else {
+          setTelegramConnected(false);
+          setTelegramUsername(null);
+        }
+      } catch (error) {
+        console.error('Failed to check Telegram status:', error);
+        setTelegramConnected(false);
+        setTelegramUsername(null);
+      }
+    }
+
+    if (sessionStatus === 'loading') return; // Wait for session to load
+    checkTelegramStatus();
+  }, [session, sessionStatus]);
+
   // Fetch whale alert config when Telegram is connected
   useEffect(() => {
     if (!session?.user?.id || !telegramConnected) return;
