@@ -17,13 +17,16 @@ def trade_matches_user_filter(
     1. Notional value threshold: notional >= minNotional
     2. Price range: price in [minPrice, maxPrice]
     3. Trade side: side in user's sides list
-    4. Exclude sports: drop if market is sports (if excludeCategories includes "sports")
-    5. Include tag IDs: require overlap with market tags (if category_filter specified)
-    6. Specific market filter: condition_id in markets_filter (if specified)
+    4. Selected categories: require intersection with market.categories (if selected_categories specified)
+    5. Specific market filter: condition_id in markets_filter (if specified)
+    
+    Legacy checks (for backward compatibility):
+    - Exclude categories: drop if market matches excluded category
+    - Include tag IDs: require overlap with market tags (if category_filter specified)
     
     Args:
         trade: Trade to check.
-        market: Market metadata from Gamma API (includes tags, tag_ids, is_sports).
+        market: Market metadata from Gamma API (includes tags, tag_ids, is_sports, categories).
         user_filter: User's filter configuration.
     
     Returns:
@@ -45,13 +48,22 @@ def trade_matches_user_filter(
     if trade.side not in user_filter.sides:
         return False
     
-    # 4. Check exclude sports (if "sports" is in exclude_categories)
-    if "sports" in [c.lower() for c in user_filter.exclude_categories]:
-        if market.is_sports:
+    # 4. Check selected categories (NEW - preferred method)
+    if user_filter.selected_categories:
+        # Load market categories
+        market_categories = market.categories or []
+        # Require intersection: at least one selected category must be in market categories
+        if not any(cat in market_categories for cat in user_filter.selected_categories):
             return False
     
-    # 5. Check exclude categories (using legacy category field or is_sports)
-    if user_filter.exclude_categories:
+    # Legacy: Check exclude categories (for backward compatibility)
+    elif user_filter.exclude_categories:
+        # Check exclude sports (if "sports" is in exclude_categories)
+        if "sports" in [c.lower() for c in user_filter.exclude_categories]:
+            if market.is_sports:
+                return False
+        
+        # Check other excluded categories
         for excluded_cat in user_filter.exclude_categories:
             excluded_cat_lower = excluded_cat.lower()
             # Check is_sports flag
@@ -60,8 +72,12 @@ def trade_matches_user_filter(
             # Check legacy category field
             if market.category and market.category.lower() == excluded_cat_lower:
                 return False
+            # Check new categories field
+            if market.categories:
+                if any(excluded_cat_lower == cat.lower() for cat in market.categories):
+                    return False
     
-    # 6. Check include tag IDs (if category_filter specified - treat as tag IDs to include)
+    # Legacy: Check include tag IDs (if category_filter specified - treat as tag IDs to include)
     if user_filter.category_filter:
         # category_filter can contain tag IDs or category names
         # Check if any market tag ID is in the filter
@@ -74,7 +90,7 @@ def trade_matches_user_filter(
             if not market.category or market.category.lower() not in [c.lower() for c in user_filter.category_filter]:
                 return False
     
-    # 7. Check specific market filter (condition_ids)
+    # 5. Check specific market filter (condition_ids)
     if user_filter.markets_filter and trade.condition_id not in user_filter.markets_filter:
         return False
     
@@ -117,13 +133,16 @@ def aggregated_trade_matches_user_filter(
     1. Notional value threshold: total_notional_usd >= minNotional
     2. Price range: vwap_price in [minPrice, maxPrice]
     3. Trade side: side in user's sides list
-    4. Exclude sports: drop if market is sports (if excludeCategories includes "sports")
-    5. Include tag IDs: require overlap with market tags (if category_filter specified)
-    6. Specific market filter: condition_id in markets_filter (if specified)
+    4. Selected categories: require intersection with market.categories (if selected_categories specified)
+    5. Specific market filter: condition_id in markets_filter (if specified)
+    
+    Legacy checks (for backward compatibility):
+    - Exclude categories: drop if market matches excluded category
+    - Include tag IDs: require overlap with market tags (if category_filter specified)
     
     Args:
         agg_trade: AggregatedTrade to check.
-        market: Market metadata from Gamma API (includes tags, tag_ids, is_sports).
+        market: Market metadata from Gamma API (includes tags, tag_ids, is_sports, categories).
         user_filter: User's filter configuration.
     
     Returns:
@@ -145,13 +164,22 @@ def aggregated_trade_matches_user_filter(
     if agg_trade.side not in user_filter.sides:
         return False
     
-    # 4. Check exclude sports (if "sports" is in exclude_categories)
-    if "sports" in [c.lower() for c in user_filter.exclude_categories]:
-        if market.is_sports:
+    # 4. Check selected categories (NEW - preferred method)
+    if user_filter.selected_categories:
+        # Load market categories
+        market_categories = market.categories or []
+        # Require intersection: at least one selected category must be in market categories
+        if not any(cat in market_categories for cat in user_filter.selected_categories):
             return False
     
-    # 5. Check exclude categories (using legacy category field or is_sports)
-    if user_filter.exclude_categories:
+    # Legacy: Check exclude categories (for backward compatibility)
+    elif user_filter.exclude_categories:
+        # Check exclude sports (if "sports" is in exclude_categories)
+        if "sports" in [c.lower() for c in user_filter.exclude_categories]:
+            if market.is_sports:
+                return False
+        
+        # Check other excluded categories
         for excluded_cat in user_filter.exclude_categories:
             excluded_cat_lower = excluded_cat.lower()
             # Check is_sports flag
@@ -160,8 +188,12 @@ def aggregated_trade_matches_user_filter(
             # Check legacy category field
             if market.category and market.category.lower() == excluded_cat_lower:
                 return False
+            # Check new categories field
+            if market.categories:
+                if any(excluded_cat_lower == cat.lower() for cat in market.categories):
+                    return False
     
-    # 6. Check include tag IDs (if category_filter specified - treat as tag IDs to include)
+    # Legacy: Check include tag IDs (if category_filter specified - treat as tag IDs to include)
     if user_filter.category_filter:
         # category_filter can contain tag IDs or category names
         # Check if any market tag ID is in the filter
@@ -174,7 +206,7 @@ def aggregated_trade_matches_user_filter(
             if not market.category or market.category.lower() not in [c.lower() for c in user_filter.category_filter]:
                 return False
     
-    # 7. Check specific market filter (condition_ids)
+    # 5. Check specific market filter (condition_ids)
     if user_filter.markets_filter and agg_trade.condition_id not in user_filter.markets_filter:
         return False
     

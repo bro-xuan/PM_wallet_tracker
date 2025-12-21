@@ -11,6 +11,8 @@ import asyncio
 import httpx as httpx_async
 from whale_worker.types import Trade, MarketMetadata, TradeMarker
 from whale_worker.config import Config
+from whale_worker.categorization import derive_categories_for_market
+from whale_worker.db import get_db
 from datetime import datetime, timedelta
 
 
@@ -333,7 +335,8 @@ def _parse_gamma_market_response(
         elif any(kw in " ".join(tag_labels_lower) for kw in ["entertainment", "movie", "tv", "celebrity", "culture"]):
             inferred_category = "culture"
     
-    return MarketMetadata(
+    # Create MarketMetadata object
+    market_metadata = MarketMetadata(
         condition_id=condition_id,
         title=title,
         slug=slug,
@@ -345,6 +348,13 @@ def _parse_gamma_market_response(
         tag_ids=market_tag_ids,
         is_sports=is_sports,
     )
+    
+    # Derive categories from tags
+    db = get_db()
+    categories = derive_categories_for_market(market_metadata, db)
+    market_metadata.categories = categories
+    
+    return market_metadata
 
 
 def fetch_market_metadata_batch(
@@ -600,7 +610,8 @@ def fetch_market_metadata(
                         category = "crypto"
                         break
         
-        return MarketMetadata(
+        # Create MarketMetadata object
+        market_metadata = MarketMetadata(
             condition_id=condition_id,
             title=title,
             slug=slug,
@@ -612,6 +623,13 @@ def fetch_market_metadata(
             tag_ids=tag_ids or [],
             is_sports=is_sports,
         )
+        
+        # Derive categories from tags
+        db = get_db()
+        categories = derive_categories_for_market(market_metadata, db)
+        market_metadata.categories = categories
+        
+        return market_metadata
         
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:

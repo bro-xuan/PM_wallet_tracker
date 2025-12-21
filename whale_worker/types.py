@@ -114,6 +114,7 @@ class MarketMetadata:
     tags: List[str] = field(default_factory=list)  # Tag labels (for display)
     tag_ids: List[str] = field(default_factory=list)  # Tag IDs (for categorization)
     is_sports: bool = False  # True if any tag_id intersects with sports tag IDs
+    categories: List[str] = field(default_factory=list)  # User-friendly categories (e.g., ["Politics", "Elections"])
 
 
 @dataclass
@@ -125,8 +126,9 @@ class UserFilter:
     max_price: float  # 0.0 to 1.0
     sides: List[str]  # ["BUY", "SELL"] or subset
     markets_filter: List[str] = field(default_factory=list)  # Optional: specific condition_ids
-    category_filter: List[str] = field(default_factory=list)  # Optional: categories to include/exclude (e.g., ["sports"])
-    exclude_categories: List[str] = field(default_factory=list)  # Optional: categories to exclude
+    category_filter: List[str] = field(default_factory=list)  # Optional: categories to include/exclude (e.g., ["sports"]) - DEPRECATED
+    exclude_categories: List[str] = field(default_factory=list)  # Optional: categories to exclude - DEPRECATED
+    selected_categories: List[str] = field(default_factory=list)  # Optional: categories to include (e.g., ["Politics", "Crypto"])
     enabled: bool = True
     telegram_chat_id: Optional[str] = None  # User's Telegram chat ID
 

@@ -5,6 +5,15 @@ import clientPromise from '@/lib/mongodb';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// Allowed category keys (must match whale_worker/categorization.py)
+const ALLOWED_CATEGORIES = [
+  'Politics', 'Sports', 'Crypto', 'Finance', 'Geopolitics',
+  'Earnings', 'Tech', 'Culture', 'World', 'Economy',
+  'Trump', 'Elections', 'Mentions'
+] as const;
+
+type CategoryKey = typeof ALLOWED_CATEGORIES[number];
+
 // Default configuration
 const DEFAULT_CONFIG = {
   minNotionalUsd: 10000,
@@ -37,6 +46,8 @@ export async function GET() {
       minPrice: config.minPrice ?? DEFAULT_CONFIG.minPrice,
       maxPrice: config.maxPrice ?? DEFAULT_CONFIG.maxPrice,
       sides: config.sides ?? DEFAULT_CONFIG.sides,
+      selectedCategories: config.selectedCategories ?? [],
+      // Legacy fields (kept for backward compatibility but deprecated)
       excludeCategories: config.excludeCategories ?? [],
       categoryFilter: config.categoryFilter ?? [],
       enabled: config.enabled ?? DEFAULT_CONFIG.enabled,
@@ -62,11 +73,11 @@ export async function PUT(req: Request) {
       return Response.json({ error: 'Invalid JSON in request body' }, { status: 400 });
     }
     
-    const { minNotionalUsd, minPrice, maxPrice, sides, excludeCategories, categoryFilter, enabled } = body;
+    const { minNotionalUsd, minPrice, maxPrice, sides, selectedCategories, excludeCategories, categoryFilter, enabled } = body;
     
     console.log('[api/whale-alerts/config] PUT request:', {
       userId: session.user.id,
-      body: { minNotionalUsd, minPrice, maxPrice, sides, excludeCategories, categoryFilter, enabled },
+      body: { minNotionalUsd, minPrice, maxPrice, sides, selectedCategories, excludeCategories, categoryFilter, enabled },
     });
     
     // Validate inputs
@@ -88,6 +99,18 @@ export async function PUT(req: Request) {
     if (enabled !== undefined && typeof enabled !== 'boolean') {
       return Response.json({ error: 'Invalid enabled (must be boolean)' }, { status: 400 });
     }
+    if (selectedCategories !== undefined) {
+      if (!Array.isArray(selectedCategories)) {
+        return Response.json({ error: 'Invalid selectedCategories (must be array)' }, { status: 400 });
+      }
+      // Validate that all items are allowed category strings
+      if (!selectedCategories.every((c: any) => typeof c === 'string' && ALLOWED_CATEGORIES.includes(c as CategoryKey))) {
+        return Response.json({ 
+          error: `Invalid selectedCategories (must be array of allowed categories: ${ALLOWED_CATEGORIES.join(', ')})` 
+        }, { status: 400 });
+      }
+    }
+    // Legacy validation (kept for backward compatibility)
     if (excludeCategories !== undefined) {
       if (!Array.isArray(excludeCategories)) {
         return Response.json({ error: 'Invalid excludeCategories (must be array)' }, { status: 400 });
@@ -119,6 +142,8 @@ export async function PUT(req: Request) {
     if (minPrice !== undefined) updateData.minPrice = minPrice;
     if (maxPrice !== undefined) updateData.maxPrice = maxPrice;
     if (sides !== undefined) updateData.sides = sides;
+    if (selectedCategories !== undefined) updateData.selectedCategories = selectedCategories;
+    // Legacy fields (kept for backward compatibility)
     if (excludeCategories !== undefined) updateData.excludeCategories = excludeCategories;
     if (categoryFilter !== undefined) updateData.categoryFilter = categoryFilter;
     if (enabled !== undefined) updateData.enabled = enabled;
@@ -136,6 +161,8 @@ export async function PUT(req: Request) {
     if (minPrice === undefined) setOnInsert.minPrice = DEFAULT_CONFIG.minPrice;
     if (maxPrice === undefined) setOnInsert.maxPrice = DEFAULT_CONFIG.maxPrice;
     if (sides === undefined) setOnInsert.sides = DEFAULT_CONFIG.sides;
+    if (selectedCategories === undefined) setOnInsert.selectedCategories = [];
+    // Legacy fields (kept for backward compatibility)
     if (excludeCategories === undefined) setOnInsert.excludeCategories = [];
     if (categoryFilter === undefined) setOnInsert.categoryFilter = [];
     if (enabled === undefined) setOnInsert.enabled = DEFAULT_CONFIG.enabled;

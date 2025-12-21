@@ -107,6 +107,51 @@ def get_all_user_filters() -> List[UserFilter]:
         chat_id = str(telegram_account.get('chatId', ''))
         
         # Build UserFilter from MongoDB document
+        # Handle migration from excludeCategories to selectedCategories
+        selected_categories = config.get('selectedCategories', [])
+        exclude_categories = config.get('excludeCategories', [])
+        
+        # Migration: If selectedCategories doesn't exist but excludeCategories does,
+        # invert excludeCategories to create selectedCategories
+        if not selected_categories and exclude_categories:
+            # All available categories (must match exactly with categorization.py)
+            all_categories = [
+                "Politics", "Sports", "Crypto", "Finance", "Geopolitics",
+                "Earnings", "Tech", "Culture", "World", "Economy",
+                "Trump", "Elections", "Mentions"
+            ]
+            # Normalize excludeCategories to match category names (case-insensitive)
+            # Map common variations to canonical names
+            category_map = {
+                "politics": "Politics",
+                "sports": "Sports",
+                "crypto": "Crypto",
+                "finance": "Finance",
+                "geopolitics": "Geopolitics",
+                "earnings": "Earnings",
+                "tech": "Tech",
+                "culture": "Culture",
+                "world": "World",
+                "economy": "Economy",
+                "trump": "Trump",
+                "elections": "Elections",
+                "mentions": "Mentions"
+            }
+            # Normalize excluded categories to canonical names
+            excluded_canonical = set()
+            for cat in exclude_categories:
+                cat_lower = cat.lower().strip()
+                if cat_lower in category_map:
+                    excluded_canonical.add(category_map[cat_lower])
+                elif cat in all_categories:
+                    excluded_canonical.add(cat)
+            
+            # Invert: selectedCategories = all categories except excluded ones
+            selected_categories = [
+                cat for cat in all_categories
+                if cat not in excluded_canonical
+            ]
+        
         user_filter = UserFilter(
             user_id=user_id,
             min_notional_usd=float(config.get('minNotionalUsd', 0)),
@@ -114,8 +159,9 @@ def get_all_user_filters() -> List[UserFilter]:
             max_price=float(config.get('maxPrice', 1)),
             sides=config.get('sides', ['BUY', 'SELL']),
             markets_filter=config.get('marketsFilter', []),
-            category_filter=config.get('categoryFilter', []),
-            exclude_categories=config.get('excludeCategories', []),
+            category_filter=config.get('categoryFilter', []),  # Legacy
+            exclude_categories=exclude_categories,  # Legacy (kept for backward compatibility)
+            selected_categories=selected_categories,  # New preferred method (migrated if needed)
             enabled=bool(config.get('enabled', False)),
             telegram_chat_id=chat_id,
         )
@@ -334,6 +380,7 @@ def get_or_upsert_market(condition_id: str, market_metadata: Optional[MarketMeta
                         tags=cached.get('tags', []),
                         tag_ids=cached.get('tagIds', []),
                         is_sports=cached.get('isSports', False),
+                        categories=cached.get('categories', []),
                     )
             else:
                 # Handle case where updatedAt might be a string
@@ -349,6 +396,7 @@ def get_or_upsert_market(condition_id: str, market_metadata: Optional[MarketMeta
                     tags=cached.get('tags', []),
                     tag_ids=cached.get('tagIds', []),
                     is_sports=cached.get('isSports', False),
+                    categories=cached.get('categories', []),
                 )
     
     # Not in cache or cache expired - store if metadata provided
@@ -367,6 +415,7 @@ def get_or_upsert_market(condition_id: str, market_metadata: Optional[MarketMeta
                     'tags': market_metadata.tags,
                     'tagIds': market_metadata.tag_ids,
                     'isSports': market_metadata.is_sports,
+                    'categories': market_metadata.categories,
                     'updatedAt': datetime.utcnow(),
                 },
                 '$setOnInsert': {

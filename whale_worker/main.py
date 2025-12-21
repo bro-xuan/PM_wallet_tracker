@@ -94,6 +94,25 @@ def run_worker() -> None:
     
     print(f"   ✅ Loaded {len(sports_tag_ids)} sports tag IDs, {len(tags_dict)} tags")
     
+    # Load tag category mappings count and example
+    from whale_worker.db_categorization import (
+        get_tag_category_mappings_count,
+        get_tag_category_mapping_example,
+        ensure_tag_category_mappings_index
+    )
+    
+    # Ensure index exists
+    ensure_tag_category_mappings_index()
+    
+    # Get count and example
+    mappings_count = get_tag_category_mappings_count()
+    example_mapping = get_tag_category_mapping_example()
+    
+    if example_mapping:
+        print(f"   ✅ Loaded {mappings_count} tagCategoryMappings, example: {example_mapping}")
+    else:
+        print(f"   ✅ Loaded {mappings_count} tagCategoryMappings (no examples yet)")
+    
     # Step 4: Load all user filters (for matching trades)
     print("\n👥 Loading user filters...")
     all_user_filters = get_all_user_filters()

@@ -117,10 +117,15 @@ export default function Home() {
     minPrice: 0.05,
     maxPrice: 0.95,
     sides: ['BUY', 'SELL'] as ('BUY' | 'SELL')[],
-    excludeCategories: [] as string[],
-    categoryFilter: [] as string[], // Tag IDs to include
-    enabled: false,
+    selectedCategories: [] as string[],
   });
+  
+  // All available categories (must match backend)
+  const ALL_CATEGORIES = [
+    'Politics', 'Sports', 'Crypto', 'Finance', 'Geopolitics',
+    'Earnings', 'Tech', 'Culture', 'World', 'Economy',
+    'Trump', 'Elections', 'Mentions'
+  ] as const;
   const [configLoading, setConfigLoading] = useState(false);
   const [testNotificationLoading, setTestNotificationLoading] = useState(false);
   
@@ -345,9 +350,7 @@ export default function Home() {
             minPrice: data.minPrice ?? prev.minPrice,
             maxPrice: data.maxPrice ?? prev.maxPrice,
             sides: data.sides ?? prev.sides,
-            excludeCategories: data.excludeCategories ?? prev.excludeCategories,
-            categoryFilter: data.categoryFilter ?? prev.categoryFilter,
-            enabled: data.enabled ?? prev.enabled,
+            selectedCategories: data.selectedCategories ?? prev.selectedCategories,
           }));
         }
       } catch (error) {
@@ -1770,57 +1773,40 @@ export default function Home() {
                         </div>
                       </div>
 
-                      {/* Exclude Categories */}
+                      {/* Selected Categories */}
                       <div>
                         <label style={{display:'block', fontSize:14, marginBottom:8, color:'var(--ink)'}}>
-                          Exclude Categories
+                          Selected Categories
                         </label>
                         <div style={{display:'flex', gap:12, flexWrap:'wrap'}}>
-                          <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer'}}>
-                            <input
-                              type="checkbox"
-                              checked={alertConfig.excludeCategories.includes('sports')}
-                              onChange={e => {
-                                if (e.target.checked) {
-                                  setAlertConfig(prev => ({...prev, excludeCategories: [...prev.excludeCategories, 'sports']}));
-                                } else {
-                                  setAlertConfig(prev => ({...prev, excludeCategories: prev.excludeCategories.filter(c => c !== 'sports')}));
-                                }
-                              }}
-                            />
-                            <span>Sports</span>
-                          </label>
-                          <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer'}}>
-                            <input
-                              type="checkbox"
-                              checked={alertConfig.excludeCategories.includes('politics')}
-                              onChange={e => {
-                                if (e.target.checked) {
-                                  setAlertConfig(prev => ({...prev, excludeCategories: [...prev.excludeCategories, 'politics']}));
-                                } else {
-                                  setAlertConfig(prev => ({...prev, excludeCategories: prev.excludeCategories.filter(c => c !== 'politics')}));
-                                }
-                              }}
-                            />
-                            <span>Politics</span>
-                          </label>
-                          <label style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer'}}>
-                            <input
-                              type="checkbox"
-                              checked={alertConfig.excludeCategories.includes('crypto')}
-                              onChange={e => {
-                                if (e.target.checked) {
-                                  setAlertConfig(prev => ({...prev, excludeCategories: [...prev.excludeCategories, 'crypto']}));
-                                } else {
-                                  setAlertConfig(prev => ({...prev, excludeCategories: prev.excludeCategories.filter(c => c !== 'crypto')}));
-                                }
-                              }}
-                            />
-                            <span>Crypto</span>
-                          </label>
+                          {ALL_CATEGORIES.map(category => (
+                            <label key={category} style={{display:'flex', alignItems:'center', gap:8, cursor:'pointer'}}>
+                              <input
+                                type="checkbox"
+                                checked={alertConfig.selectedCategories.includes(category)}
+                                onChange={e => {
+                                  if (e.target.checked) {
+                                    setAlertConfig(prev => ({
+                                      ...prev,
+                                      selectedCategories: [...prev.selectedCategories, category]
+                                    }));
+                                  } else {
+                                    setAlertConfig(prev => ({
+                                      ...prev,
+                                      selectedCategories: prev.selectedCategories.filter(c => c !== category)
+                                    }));
+                                  }
+                                }}
+                              />
+                              <span>{category}</span>
+                            </label>
+                          ))}
                         </div>
                         <div style={{fontSize:12, color:'var(--muted)', marginTop:4}}>
-                          Exclude trades from these categories
+                          {alertConfig.selectedCategories.length === 0
+                            ? 'Select categories to receive alerts for (leave empty for all categories)'
+                            : `Selected ${alertConfig.selectedCategories.length} categor${alertConfig.selectedCategories.length === 1 ? 'y' : 'ies'}`
+                          }
                         </div>
                       </div>
                     </div>
@@ -1836,10 +1822,18 @@ export default function Home() {
                         setConfigLoading(true);
                         try {
                           console.log('Saving config:', alertConfig);
+                          // Only send selectedCategories (not excludeCategories or categoryFilter)
+                          const configToSave = {
+                            minNotionalUsd: alertConfig.minNotionalUsd,
+                            minPrice: alertConfig.minPrice,
+                            maxPrice: alertConfig.maxPrice,
+                            sides: alertConfig.sides,
+                            selectedCategories: alertConfig.selectedCategories,
+                          };
                           const res = await fetch('/api/whale-alerts/config', {
                             method: 'PUT',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(alertConfig),
+                            body: JSON.stringify(configToSave),
                             cache: 'no-store',
                           });
                           
