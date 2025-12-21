@@ -158,6 +158,23 @@ export async function PUT(req: Request) {
       upserted: result.upsertedCount,
     });
     
+    // Signal worker to reload filters immediately
+    // Only if settings were actually updated (not just created)
+    if (result.modifiedCount > 0 || result.upsertedCount > 0) {
+      const filterReloadCollection = db.collection('filterReloadSignals');
+      await filterReloadCollection.updateOne(
+        { _id: 'global' },
+        { 
+          $set: { 
+            requestedAt: new Date(),
+            requestedBy: session.user.id
+          } 
+        },
+        { upsert: true }
+      );
+      console.log('[api/whale-alerts/config] Filter reload signal set');
+    }
+    
     return Response.json({ success: true, updated: result.modifiedCount > 0 || result.upsertedCount > 0 });
     
   } catch (error: any) {

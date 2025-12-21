@@ -49,6 +49,28 @@ def get_db() -> Database:
     return _db
 
 
+def check_filter_reload_signal() -> bool:
+    """
+    Check if filters should be reloaded immediately (set by settings save).
+    
+    Returns:
+        True if reload signal exists, False otherwise.
+    """
+    db = get_db()
+    signals_collection = db['filterReloadSignals']
+    signal = signals_collection.find_one({ '_id': 'global' })
+    return signal is not None
+
+
+def clear_filter_reload_signal() -> None:
+    """
+    Clear the filter reload signal after reloading.
+    """
+    db = get_db()
+    signals_collection = db['filterReloadSignals']
+    signals_collection.delete_one({ '_id': 'global' })
+
+
 def get_all_user_filters() -> List[UserFilter]:
     """
     Fetch all active user filter configurations from MongoDB.

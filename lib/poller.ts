@@ -15,18 +15,29 @@ async function wallets(): Promise<string[]> {
   try {
     const db = await getDb();
     const walletsCollection = db.collection('wallets');
+    
+    // Add timeout to the query operation
     const allWallets = await walletsCollection.find(
       { isActive: true },
-      { projection: { address: 1, _id: 0 } }
+      { 
+        projection: { address: 1, _id: 0 },
+        maxTimeMS: 10000 // 10 second timeout for the query itself
+      }
     ).toArray();
+    
     // Ensure lowercase + uniqueness
     const set = new Set<string>();
     allWallets.forEach((w: any) => {
       if (w.address) set.add(String(w.address).toLowerCase());
     });
     return Array.from(set);
-  } catch (error) {
-    console.error('[poller] Error fetching wallets from MongoDB:', error);
+  } catch (error: any) {
+    // More detailed error logging
+    if (error.name === 'MongoServerSelectionError' || error.name === 'MongoNetworkTimeoutError') {
+      console.error('[poller] MongoDB connection timeout - check network/MongoDB URI:', error.message);
+    } else {
+      console.error('[poller] Error fetching wallets from MongoDB:', error);
+    }
     return [];
   }
 }
@@ -35,10 +46,17 @@ async function getCursor(address: string): Promise<number> {
   try {
     const db = await getDb();
     const cursors = db.collection('cursors');
-    const doc = await cursors.findOne<{ last_ts?: number }>({ address });
+    const doc = await cursors.findOne<{ last_ts?: number }>(
+      { address },
+      { maxTimeMS: 5000 } // 5 second timeout
+    );
     return doc?.last_ts ?? 0;
-  } catch (error) {
-    console.error('[poller] Error reading cursor:', error);
+  } catch (error: any) {
+    if (error.name === 'MongoServerSelectionError' || error.name === 'MongoNetworkTimeoutError') {
+      console.error('[poller] MongoDB connection timeout reading cursor:', error.message);
+    } else {
+      console.error('[poller] Error reading cursor:', error);
+    }
     return 0;
   }
 }
@@ -50,10 +68,17 @@ async function updateCursor(address: string, lastTs: number) {
     await cursors.updateOne(
       { address },
       { $set: { address, last_ts: lastTs } },
-      { upsert: true }
+      { 
+        upsert: true,
+        maxTimeMS: 5000 // 5 second timeout
+      }
     );
-  } catch (error) {
-    console.error('[poller] Error updating cursor:', error);
+  } catch (error: any) {
+    if (error.name === 'MongoServerSelectionError' || error.name === 'MongoNetworkTimeoutError') {
+      console.error('[poller] MongoDB connection timeout updating cursor:', error.message);
+    } else {
+      console.error('[poller] Error updating cursor:', error);
+    }
   }
 }
 
@@ -82,12 +107,19 @@ async function upsertTrade(t: DataTrade): Promise<boolean> {
           createdAt: new Date(), // Track when trade was first created
         },
       },
-      { upsert: true }
+      { 
+        upsert: true,
+        maxTimeMS: 10000 // 10 second timeout
+      }
     );
     // Return true if trade was inserted or updated
     return result.upsertedCount > 0 || result.modifiedCount > 0 || result.matchedCount > 0;
-  } catch (error) {
-    console.error('[poller] Error upserting trade:', error);
+  } catch (error: any) {
+    if (error.name === 'MongoServerSelectionError' || error.name === 'MongoNetworkTimeoutError') {
+      console.error('[poller] MongoDB connection timeout upserting trade:', error.message);
+    } else {
+      console.error('[poller] Error upserting trade:', error);
+    }
     return false;
   }
 }

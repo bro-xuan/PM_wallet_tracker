@@ -6,7 +6,23 @@ if (!process.env.MONGODB_URI) {
 }
 
 const uri = process.env.MONGODB_URI;
-const options = {};
+const options = {
+  // Connection timeout settings
+  connectTimeoutMS: 30000, // 30 seconds to establish connection
+  serverSelectionTimeoutMS: 30000, // 30 seconds to select server
+  socketTimeoutMS: 45000, // 45 seconds for socket operations
+  
+  // Connection pool settings
+  maxPoolSize: 10, // Maximum number of connections in pool
+  minPoolSize: 1, // Minimum number of connections in pool
+  
+  // Retry settings
+  retryWrites: true,
+  retryReads: true,
+  
+  // Heartbeat settings (keep connection alive)
+  heartbeatFrequencyMS: 10000, // Check connection health every 10 seconds
+};
 
 let client: MongoClient;
 let clientPromise: Promise<MongoClient>;

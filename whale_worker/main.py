@@ -14,6 +14,8 @@ from whale_worker.db import (
     mark_trade_as_processed,
     is_trade_processed,
     ensure_processed_trades_ttl_index,
+    check_filter_reload_signal,
+    clear_filter_reload_signal,
 )
 from whale_worker.polymarket_client import (
     fetch_recent_trades,
@@ -117,17 +119,55 @@ def run_worker() -> None:
             poll_count += 1
             print(f"\n📊 Poll #{poll_count} - Fetching trades...")
             
-            # Reload user filters periodically to pick up changes
+            # Check if filters should be reloaded (immediate signal or periodic interval)
             current_time = time.time()
-            if current_time - last_filter_reload >= filter_reload_interval:
-                print("   🔄 Reloading user filters (checking for updates)...")
+            should_reload = False
+            reload_reason = ""
+            
+            # Check for immediate reload signal (set when user saves settings)
+            if check_filter_reload_signal():
+                should_reload = True
+                reload_reason = "settings changed"
+            # Or check if periodic reload interval has elapsed
+            elif current_time - last_filter_reload >= filter_reload_interval:
+                should_reload = True
+                reload_reason = "periodic refresh"
+            
+            if should_reload:
+                print(f"   🔄 Reloading user filters ({reload_reason})...")
                 try:
                     new_filters = get_all_user_filters()
                     old_count = len(all_user_filters)
                     new_count = len(new_filters)
+                    
+                    # Compare filter values to detect actual changes
+                    filters_changed = False
+                    if old_count != new_count:
+                        filters_changed = True
+                    else:
+                        # Check if any filter values changed
+                        old_filter_dict = {f.user_id: f for f in all_user_filters}
+                        for new_filter in new_filters:
+                            old_filter = old_filter_dict.get(new_filter.user_id)
+                            if old_filter:
+                                if (old_filter.min_notional_usd != new_filter.min_notional_usd or
+                                    old_filter.min_price != new_filter.min_price or
+                                    old_filter.max_price != new_filter.max_price or
+                                    set(old_filter.sides) != set(new_filter.sides) or
+                                    old_filter.enabled != new_filter.enabled):
+                                    filters_changed = True
+                                    break
+                    
                     all_user_filters = new_filters
                     last_filter_reload = current_time
-                    if new_count != old_count:
+                    
+                    # Clear reload signal if it was set
+                    if reload_reason == "settings changed":
+                        clear_filter_reload_signal()
+                    
+                    if filters_changed:
+                        print(f"   ✅ Filters updated: {old_count} → {new_count} active filters (values changed)")
+                    elif new_count != old_count:
                         print(f"   ✅ Filters updated: {old_count} → {new_count} active filters")
                     else:
                         print(f"   ✅ Filters refreshed: {new_count} active filters (no changes)")
