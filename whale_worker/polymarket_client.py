@@ -232,46 +232,105 @@ def fetch_sports_tag_ids() -> Set[str]:
 
 def fetch_tags_dictionary() -> Dict[str, Dict]:
     """
-    Fetch all tags from Gamma API and build a dictionary.
+    Fetch all tags from Gamma API using pagination and build a dictionary.
+    
+    The /tags endpoint is paginated with limit and offset parameters.
+    The API appears to return max 300 tags per page regardless of limit.
+    We fetch all pages until we get fewer results or no new tags.
     
     Returns:
         Dictionary mapping tag ID -> {label, slug, ...}
         
     API Endpoint:
-        GET https://gamma-api.polymarket.com/tags
+        GET https://gamma-api.polymarket.com/tags?limit=1000&offset=0
     """
     config = Config.get_config()
     gamma_api_url = config.POLYMARKET_GAMMA_API_URL
     
     url = f"{gamma_api_url}/tags"
     
+    tags_dict = {}
+    limit = 1000  # Request limit (API may cap at 300 per page)
+    offset = 0
+    total_fetched = 0
+    seen_tag_ids = set()  # Track duplicates to detect when we've seen all tags
+    
     try:
-        with httpx.Client(timeout=30.0) as client:
-            # Request with limit=1000 to get more tags (API returns 300 with limit, 100 without)
-            response = client.get(url, params={"limit": "1000"})
-            response.raise_for_status()
-            tags = response.json()
-        
-        # Build dictionary: tag_id -> tag_info
-        tags_dict = {}
-        for tag in tags:
-            tag_id = str(tag.get("id", ""))
-            if tag_id:
-                tags_dict[tag_id] = {
-                    "label": tag.get("label", ""),
-                    "slug": tag.get("slug", ""),
-                    "publishedAt": tag.get("publishedAt"),
-                    "createdAt": tag.get("createdAt"),
-                    "updatedAt": tag.get("updatedAt"),
-                    "requiresTranslation": tag.get("requiresTranslation", False),
+        with httpx.Client(timeout=60.0) as client:
+            while True:
+                # Fetch page with limit and offset
+                params = {
+                    "limit": str(limit),
+                    "offset": str(offset)
                 }
-        
-        print(f"✅ Fetched {len(tags_dict)} tags")
-        return tags_dict
+                
+                response = client.get(url, params=params)
+                response.raise_for_status()
+                tags = response.json()
+                
+                if not tags or len(tags) == 0:
+                    # No more tags
+                    break
+                
+                # Process tags from this page
+                page_count = 0
+                new_tags = 0
+                for tag in tags:
+                    tag_id = str(tag.get("id", ""))
+                    if tag_id:
+                        # Only add if we haven't seen this tag ID before
+                        if tag_id not in seen_tag_ids:
+                            tags_dict[tag_id] = {
+                                "label": tag.get("label", ""),
+                                "slug": tag.get("slug", ""),
+                                "publishedAt": tag.get("publishedAt"),
+                                "createdAt": tag.get("createdAt"),
+                                "updatedAt": tag.get("updatedAt"),
+                                "requiresTranslation": tag.get("requiresTranslation", False),
+                            }
+                            seen_tag_ids.add(tag_id)
+                            new_tags += 1
+                        page_count += 1
+                
+                total_fetched += page_count
+                print(f"   Fetched page: offset={offset}, count={page_count}, new={new_tags}, total_unique={len(tags_dict)}")
+                
+                # If we got no new tags, we've seen everything
+                if new_tags == 0:
+                    print(f"   No new tags on this page, stopping pagination")
+                    break
+                
+                # If we got fewer tags than expected (less than 300), we might be at the end
+                # But continue anyway in case there are more pages
+                if len(tags) < 300:
+                    # Try one more page to be sure
+                    offset += limit
+                    next_response = client.get(url, params={"limit": str(limit), "offset": str(offset)})
+                    next_tags = next_response.json()
+                    if not next_tags or len(next_tags) == 0:
+                        break
+                    # If next page has tags, continue
+                
+                # Move to next page
+                offset += limit
+                
+                # Safety limit: stop after 100 pages (50k offset, should be more than enough)
+                # Most APIs have way fewer than 50k tags
+                if offset > 50000:
+                    print(f"   Reached safety limit (50k offset), stopping")
+                    break
+            
+            print(f"✅ Fetched {total_fetched} tags total ({len(tags_dict)} unique)")
+            return tags_dict
         
     except Exception as e:
         print(f"❌ Error fetching tags: {e}")
-        return {}
+        import traceback
+        traceback.print_exc()
+        # Return what we've fetched so far
+        if tags_dict:
+            print(f"⚠️  Returning partial tags dictionary ({len(tags_dict)} tags)")
+        return tags_dict
 
 
 def _parse_gamma_market_response(
