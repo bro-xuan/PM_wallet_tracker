@@ -7,6 +7,8 @@ This module handles:
 """
 from typing import List, Optional, Set, Dict
 import httpx
+import asyncio
+import httpx as httpx_async
 from whale_worker.types import Trade, MarketMetadata, TradeMarker
 from whale_worker.config import Config
 from datetime import datetime, timedelta
@@ -220,16 +222,93 @@ def fetch_tags_dictionary() -> Dict[str, Dict]:
         return {}
 
 
+def _parse_gamma_market_response(
+    market: Dict,
+    sports_tag_ids: Set[str],
+    tags_dict: Dict[str, Dict]
+) -> Optional[MarketMetadata]:
+    """
+    Parse a single market response from Gamma API into MarketMetadata.
+    
+    Args:
+        market: Market data dict from Gamma API response.
+        sports_tag_ids: Set of tag IDs that identify sports markets.
+        tags_dict: Dictionary mapping tag IDs to their full metadata.
+    
+    Returns:
+        MarketMetadata object or None if parsing fails.
+    """
+    condition_id = market.get("conditionId") or market.get("id")
+    if not condition_id:
+        return None
+    
+    # Extract fields from Gamma API response
+    title = market.get("question") or market.get("title") or market.get("name") or "Unknown Market"
+    slug = market.get("slug")
+    description = market.get("description")
+    image_url = market.get("image") or market.get("imageUrl")
+    
+    # Extract raw tag IDs and tag labels
+    market_tag_ids: List[str] = []
+    market_tag_labels: List[str] = []
+    raw_tags = market.get("tags", [])
+    
+    for tag_obj in raw_tags:
+        if isinstance(tag_obj, dict):
+            tag_id = str(tag_obj.get("id", ""))
+            if tag_id:
+                market_tag_ids.append(tag_id)
+                # Use label from tags_dict if available, otherwise from tag_obj
+                market_tag_labels.append(
+                    tags_dict.get(tag_id, {}).get("label", 
+                        tag_obj.get("label", tag_obj.get("slug", tag_id)))
+                )
+        elif isinstance(tag_obj, str):
+            # Fallback for string tags
+            market_tag_labels.append(tag_obj)
+    
+    # Determine if it's a sports market
+    is_sports = bool(sports_tag_ids.intersection(set(market_tag_ids)))
+    
+    # Infer a primary category from tags if not explicitly provided
+    inferred_category = None
+    if market_tag_labels:
+        tag_labels_lower = [label.lower() for label in market_tag_labels]
+        
+        if is_sports:
+            inferred_category = "sports"
+        elif any(kw in " ".join(tag_labels_lower) for kw in ["politics", "election", "president", "congress", "senate", "house"]):
+            inferred_category = "politics"
+        elif any(kw in " ".join(tag_labels_lower) for kw in ["crypto", "bitcoin", "ethereum", "blockchain", "btc", "eth"]):
+            inferred_category = "crypto"
+        elif any(kw in " ".join(tag_labels_lower) for kw in ["entertainment", "movie", "tv", "celebrity", "culture"]):
+            inferred_category = "culture"
+    
+    return MarketMetadata(
+        condition_id=condition_id,
+        title=title,
+        slug=slug,
+        description=description,
+        image_url=image_url,
+        category=inferred_category,
+        subcategory=market.get("subcategory"),
+        tags=market_tag_labels,
+        tag_ids=market_tag_ids,
+        is_sports=is_sports,
+    )
+
+
 def fetch_market_metadata_batch(
     condition_ids: List[str],
     sports_tag_ids: Set[str],
     tags_dict: Dict[str, Dict]
 ) -> Dict[str, MarketMetadata]:
     """
-    Fetch market metadata for multiple condition IDs in a single API call.
+    Fetch market metadata for multiple condition IDs.
     
-    This is more efficient than fetching one at a time, especially during bursts
-    when many new markets appear. Reduces network calls from N to 1.
+    NOTE: The Gamma API does not properly support batch fetching with comma-separated
+    condition IDs or multiple parameters. This function attempts batch fetch first,
+    then falls back to concurrent individual fetches for better performance.
     
     Args:
         condition_ids: List of Polymarket condition IDs to fetch.
@@ -241,118 +320,130 @@ def fetch_market_metadata_batch(
         
     API Endpoint:
         GET https://gamma-api.polymarket.com/markets
-        ?condition_ids={condition_id1,condition_id2,...}
+        ?condition_ids={condition_id}
         &include_tag=true
         &closed=false
-        &limit=100
+        &limit=1
     """
     if not condition_ids:
         return {}
     
     config = Config.get_config()
     gamma_api_url = config.POLYMARKET_GAMMA_API_URL
-    
-    # Gamma API accepts comma-separated condition_ids
-    condition_ids_str = ','.join(condition_ids)
-    
     url = f"{gamma_api_url}/markets"
-    params = {
-        "condition_ids": condition_ids_str,
-        "include_tag": "true",
-        "closed": "false",
-        "limit": str(len(condition_ids)),  # Request all we need
-    }
     
     results = {}
     
+    # Attempt batch fetch first (though it typically fails)
+    # This is kept for potential future API improvements
     try:
+        condition_ids_str = ','.join(condition_ids)
+        params = {
+            "condition_ids": condition_ids_str,
+            "include_tag": "true",
+            "closed": "false",
+            "limit": str(len(condition_ids)),
+        }
+        
         with httpx.Client(timeout=30.0) as client:
             response = client.get(url, params=params)
             response.raise_for_status()
             markets = response.json()
-        
-        # Process each market in the response
-        for market in markets:
-            condition_id = market.get("conditionId") or market.get("id")
-            if not condition_id:
-                continue
             
-            # Extract fields from Gamma API response
-            title = market.get("question") or market.get("title") or market.get("name") or "Unknown Market"
-            slug = market.get("slug")
-            description = market.get("description")
-            image_url = market.get("image") or market.get("imageUrl")
-            
-            # Extract raw tag IDs and tag labels
-            market_tag_ids: List[str] = []
-            market_tag_labels: List[str] = []
-            raw_tags = market.get("tags", [])
-            
-            for tag_obj in raw_tags:
-                if isinstance(tag_obj, dict):
-                    tag_id = str(tag_obj.get("id", ""))
-                    if tag_id:
-                        market_tag_ids.append(tag_id)
-                        # Use label from tags_dict if available, otherwise from tag_obj
-                        market_tag_labels.append(
-                            tags_dict.get(tag_id, {}).get("label", 
-                                tag_obj.get("label", tag_obj.get("slug", tag_id)))
-                        )
-                elif isinstance(tag_obj, str):
-                    # Fallback for string tags
-                    market_tag_labels.append(tag_obj)
-            
-            # Determine if it's a sports market
-            is_sports = bool(sports_tag_ids.intersection(set(market_tag_ids)))
-            
-            # Infer a primary category from tags if not explicitly provided
-            inferred_category = None
-            if market_tag_labels:
-                tag_labels_lower = [label.lower() for label in market_tag_labels]
+            # If batch fetch succeeds, process results
+            if markets:
+                for market in markets:
+                    condition_id = market.get("conditionId") or market.get("id")
+                    if condition_id:
+                        metadata = _parse_gamma_market_response(market, sports_tag_ids, tags_dict)
+                        if metadata:
+                            results[condition_id] = metadata
                 
-                if is_sports:
-                    inferred_category = "sports"
-                elif any(kw in " ".join(tag_labels_lower) for kw in ["politics", "election", "president", "congress", "senate", "house"]):
-                    inferred_category = "politics"
-                elif any(kw in " ".join(tag_labels_lower) for kw in ["crypto", "bitcoin", "ethereum", "blockchain", "btc", "eth"]):
-                    inferred_category = "crypto"
-                elif any(kw in " ".join(tag_labels_lower) for kw in ["entertainment", "movie", "tv", "celebrity", "culture"]):
-                    inferred_category = "culture"
-            
-            metadata = MarketMetadata(
-                condition_id=condition_id,
-                title=title,
-                slug=slug,
-                description=description,
-                image_url=image_url,
-                category=inferred_category,
-                subcategory=market.get("subcategory"),
-                tags=market_tag_labels,
-                tag_ids=market_tag_ids,
-                is_sports=is_sports,
-            )
-            
-            results[condition_id] = metadata
-        
-        return results
-        
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            # No markets found - return empty dict
-            return {}
-        print(f"❌ Error fetching market metadata batch: HTTP {e.response.status_code}")
-        try:
-            error_body = e.response.json()
-            print(f"   Error details: {error_body}")
-        except:
-            print(f"   Response: {e.response.text[:200]}")
-        return {}
-    except httpx.TimeoutException:
-        print(f"❌ Timeout fetching market metadata batch")
-        return {}
+                # If we got all markets from batch, return early
+                if len(results) == len(condition_ids):
+                    return results
     except Exception as e:
-        print(f"❌ Error fetching market metadata batch: {e}")
-        return {}
+        # Batch fetch failed, will fall back to individual fetches
+        pass
+    
+    # Fall back to concurrent individual fetches
+    # This is more efficient than sequential fetches
+    if len(results) < len(condition_ids):
+        missing_ids = [cid for cid in condition_ids if cid not in results]
+        
+        if len(missing_ids) > 1:
+            print(f"   ⚠️  Batch fetch failed/partial, fetching {len(missing_ids)} markets individually (concurrent)...")
+        else:
+            print(f"   📦 Fetching {len(missing_ids)} market(s) individually...")
+        
+        # Use httpx.AsyncClient for concurrent requests (faster than sequential)
+        async def fetch_single_market(condition_id: str) -> Optional[MarketMetadata]:
+            """Fetch a single market metadata."""
+            # Try with closed=false first (for active markets)
+            params = {
+                "condition_ids": condition_id,
+                "include_tag": "true",
+                "closed": "false",
+                "limit": "1",
+            }
+            try:
+                async with httpx_async.AsyncClient(timeout=30.0) as async_client:
+                    response = await async_client.get(url, params=params)
+                    response.raise_for_status()
+                    markets_data = response.json()
+                    if markets_data and len(markets_data) > 0:
+                        return _parse_gamma_market_response(markets_data[0], sports_tag_ids, tags_dict)
+                    
+                    # If not found with closed=false, try without closed parameter (includes closed markets)
+                    params_no_closed = {
+                        "condition_ids": condition_id,
+                        "include_tag": "true",
+                        "limit": "1",
+                    }
+                    response = await async_client.get(url, params=params_no_closed)
+                    response.raise_for_status()
+                    markets_data = response.json()
+                    if markets_data and len(markets_data) > 0:
+                        return _parse_gamma_market_response(markets_data[0], sports_tag_ids, tags_dict)
+            except Exception as e:
+                print(f"   ⚠️  Failed to fetch {condition_id[:20]}...: {e}")
+            return None
+        
+        # Fetch all missing markets concurrently
+        async def fetch_all_markets():
+            tasks = [fetch_single_market(cid) for cid in missing_ids]
+            return await asyncio.gather(*tasks)
+        
+        # Run async fetches
+        try:
+            fetched_markets = asyncio.run(fetch_all_markets())
+            for condition_id, metadata in zip(missing_ids, fetched_markets):
+                if metadata:
+                    results[condition_id] = metadata
+        except Exception as e:
+            print(f"   ❌ Error in concurrent fetch: {e}")
+            # Fall back to sequential if async fails
+            with httpx.Client(timeout=30.0) as client:
+                for condition_id in missing_ids:
+                    params = {
+                        "condition_ids": condition_id,
+                        "include_tag": "true",
+                        "closed": "false",
+                        "limit": "1",
+                    }
+                    try:
+                        response = client.get(url, params=params)
+                        response.raise_for_status()
+                        markets_data = response.json()
+                        if markets_data and len(markets_data) > 0:
+                            metadata = _parse_gamma_market_response(markets_data[0], sports_tag_ids, tags_dict)
+                            if metadata:
+                                results[condition_id] = metadata
+                    except Exception as e:
+                        print(f"   ⚠️  Failed to fetch {condition_id[:20]}...: {e}")
+                        continue
+    
+    return results
 
 
 def fetch_market_metadata(
