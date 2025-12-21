@@ -23,7 +23,7 @@ class Config:
     # Worker configuration
     GLOBAL_MIN_NOTIONAL_USD: float = float(os.getenv('GLOBAL_MIN_NOTIONAL_USD', '0'))
     POLL_INTERVAL_SECONDS: int = int(os.getenv('POLL_INTERVAL_SECONDS', '10'))
-    MAX_TRADES_PER_POLL: int = int(os.getenv('MAX_TRADES_PER_POLL', '1000'))
+    MAX_TRADES_PER_POLL: int = int(os.getenv('MAX_TRADES_PER_POLL', '2000'))
     FILTER_RELOAD_INTERVAL_SECONDS: int = int(os.getenv('FILTER_RELOAD_INTERVAL_SECONDS', '60'))  # Reload filters every 60 seconds
     
     # Polymarket API URLs

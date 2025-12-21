@@ -1,6 +1,7 @@
 // POST /api/telegram/connect-token - Generate a one-time token for Telegram connection
 import { auth } from '@/lib/auth';
 import clientPromise from '@/lib/mongodb';
+import { ensureTelegramTokenIndexes } from '@/lib/telegram-tokens-indexes';
 import { randomBytes } from 'crypto';
 
 export const runtime = 'nodejs';
@@ -16,6 +17,9 @@ export async function POST() {
   }
 
   try {
+    // Ensure indexes exist (idempotent, only runs once per process)
+    await ensureTelegramTokenIndexes();
+    
     // Generate a secure random token
     const token = randomBytes(32).toString('hex');
     
@@ -34,13 +38,9 @@ export async function POST() {
       used: false,
     });
     
-    // Clean up expired tokens (best effort, don't block on this)
-    tokensCollection.deleteMany({ 
-      $or: [
-        { expiresAt: { $lt: new Date() } },
-        { used: true }
-      ]
-    }).catch(() => {});
+    // Note: TTL index on expiresAt will auto-delete expired tokens
+    // Still clean up used tokens manually (TTL only handles expiration, not 'used' flag)
+    tokensCollection.deleteMany({ used: true }).catch(() => {});
     
     console.log('[api/telegram/connect-token] Generated token for userId:', session.user.id);
     

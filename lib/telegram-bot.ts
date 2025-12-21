@@ -1,6 +1,7 @@
 // Telegram Bot handler for whale alerts
 import TelegramBot from 'node-telegram-bot-api';
 import clientPromise from './mongodb';
+import { ensureTelegramTokenIndexes } from './telegram-tokens-indexes';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'PM_Intel_bot';
@@ -139,6 +140,9 @@ function setupHandlers() {
       console.log(`[telegram-bot] 🔗 Processing connection with token, chatId: ${chatId}`);
       
       try {
+        // Ensure indexes exist (idempotent, only runs once per process)
+        await ensureTelegramTokenIndexes();
+        
         // Verify token in MongoDB
         const client = await clientPromise;
         const db = client.db(process.env.MONGODB_DB_NAME || 'pm-wallet-tracker');

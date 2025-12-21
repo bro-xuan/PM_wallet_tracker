@@ -25,9 +25,12 @@ def fetch_recent_trades(
     You'll need to fetch market metadata from Gamma API separately
     using fetch_market_metadata() to get category data.
     
+    IMPORTANT: The Data API does NOT support minTimestamp parameter.
+    We always fetch the latest N trades and rely on deduplication
+    (processedTrades TTL collection) to filter out already-processed trades.
+    
     Args:
-        last_marker: Optional TradeMarker with last_processed_timestamp to fetch
-                     only trades newer than this timestamp.
+        last_marker: Optional TradeMarker (kept for compatibility, not used for filtering).
         min_notional: Minimum notional value to filter trades (from GLOBAL_MIN_NOTIONAL_USD).
     
     Returns:
@@ -36,9 +39,20 @@ def fetch_recent_trades(
     API Endpoint:
         GET https://data-api.polymarket.com/trades
         ?takerOnly=true
-        &limit=1000
+        &limit=2000
         &filterType=CASH
         &filterAmount={min_notional}
+        
+    Supported Parameters (from API docs):
+        - limit: Max number of trades to return
+        - offset: Pagination offset
+        - takerOnly: Only taker trades
+        - filterType: CASH or CREDIT
+        - filterAmount: Minimum notional filter
+        - market: Filter by market
+        - eventId: Filter by event
+        - user: Filter by user address
+        - side: BUY or SELL
     """
     config = Config.get_config()
     data_api_url = config.POLYMARKET_DATA_API_URL
@@ -51,16 +65,13 @@ def fetch_recent_trades(
         "filterType": "CASH",
     }
     
-    
     # Add minimum notional filter if configured
     if min_notional > 0:
         params["filterAmount"] = str(min_notional)
     
-    # Add timestamp filter if marker provided (to only get new trades)
-    # Note: API might use minTimestamp or similar - adjust based on actual API
-    if last_marker and last_marker.last_processed_timestamp:
-        # Try minTimestamp first, fallback to other param names if needed
-        params["minTimestamp"] = str(last_marker.last_processed_timestamp)
+    # NOTE: We do NOT use minTimestamp - it's not a supported parameter.
+    # We always fetch the latest N trades and rely on processedTrades
+    # deduplication collection to filter out already-processed trades.
     
     try:
         with httpx.Client(timeout=30.0) as client:

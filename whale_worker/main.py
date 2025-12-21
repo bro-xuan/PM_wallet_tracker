@@ -192,33 +192,36 @@ def run_worker() -> None:
                     print("   No new trades found")
                 else:
                     # Filter out trades we've already processed
-                    # Strategy:
-                    # 1. Use cursor (last_processed_tx_hash) to skip trades we've seen
-                    # 2. Use deduplication set to prevent re-processing same tx_hash
-                    #    (handles edge cases: same timestamp, restart scenarios)
+                    # Strategy: Rely on processedTrades TTL collection for deduplication
+                    # (The API doesn't support minTimestamp, so we always fetch latest N trades)
+                    # 
+                    # The cursor (last_processed_tx_hash) is kept for logging/info purposes,
+                    # but we don't rely on it for filtering since the API always returns
+                    # the latest trades regardless of timestamp.
                     new_trades = []
                     seen_cursor = False
                     
-                    if last_marker and last_marker.last_processed_tx_hash:
-                        for trade in trades:
-                            # Stop when we reach the last processed trade (cursor)
+                    # Check each trade against deduplication set
+                    for trade in trades:
+                        # Check if already processed (primary deduplication method)
+                        if is_trade_processed(trade.transaction_hash):
+                            continue
+                        
+                        # Track if we see the cursor trade (for logging/info)
+                        if last_marker and last_marker.last_processed_tx_hash:
                             if trade.transaction_hash == last_marker.last_processed_tx_hash:
                                 seen_cursor = True
-                                break
-                            
-                            # Skip if already processed (deduplication set)
-                            if is_trade_processed(trade.transaction_hash):
-                                continue
-                            
-                            new_trades.append(trade)
-                    else:
-                        # No cursor yet - check deduplication set for all trades
-                        for trade in trades:
-                            if not is_trade_processed(trade.transaction_hash):
-                                new_trades.append(trade)
+                                # Don't break - continue processing newer trades
+                                # (cursor is just for info, not filtering)
+                        
+                        new_trades.append(trade)
                     
-                    if last_marker and last_marker.last_processed_tx_hash and not seen_cursor:
-                        print(f"   ⚠️  Warning: Last processed trade not found in API response (may have been filtered out)")
+                    # Log cursor status (informational only)
+                    if last_marker and last_marker.last_processed_tx_hash:
+                        if seen_cursor:
+                            print(f"   ℹ️  Cursor trade found in response (deduplication working correctly)")
+                        else:
+                            print(f"   ℹ️  Cursor trade not in response (may have expired from dedupe set or filtered by API)")
                     
                     print(f"   Found {len(new_trades)} new trades to process (after deduplication)")
                     
