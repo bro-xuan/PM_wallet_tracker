@@ -194,16 +194,16 @@ def set_last_processed_trade_marker(marker: TradeMarker) -> None:
     )
 
 
-def mark_trade_as_processed(tx_hash: str, ttl_minutes: int = 15) -> None:
+def mark_trade_as_processed(fill_key: str, ttl_minutes: int = 15) -> None:
     """
-    Mark a trade as processed in the deduplication set.
+    Mark a fill as processed in the deduplication set.
     
     This creates a TTL-indexed document that will be automatically deleted
-    after the TTL expires. This prevents re-processing the same trade
+    after the TTL expires. This prevents re-processing the same fill
     even if the cursor is reset or there are timestamp collisions.
     
     Args:
-        tx_hash: Transaction hash of the processed trade.
+        fill_key: Unique fill key (format: tx_hash:wallet:condition:outcome:side:size:price).
         ttl_minutes: TTL in minutes (default: 15 minutes).
     """
     db = get_db()
@@ -213,10 +213,10 @@ def mark_trade_as_processed(tx_hash: str, ttl_minutes: int = 15) -> None:
     expires_at = datetime.utcnow() + timedelta(minutes=ttl_minutes)
     
     processed_trades_collection.update_one(
-        { 'txHash': tx_hash },
+        { 'fillKey': fill_key },
         {
             '$set': {
-                'txHash': tx_hash,
+                'fillKey': fill_key,
                 'processedAt': datetime.utcnow(),
                 'expiresAt': expires_at,
             },
@@ -228,22 +228,22 @@ def mark_trade_as_processed(tx_hash: str, ttl_minutes: int = 15) -> None:
     )
 
 
-def is_trade_processed(tx_hash: str) -> bool:
+def is_trade_processed(fill_key: str) -> bool:
     """
-    Check if a trade has already been processed.
+    Check if a fill has already been processed.
     
     Args:
-        tx_hash: Transaction hash to check.
+        fill_key: Unique fill key to check (format: tx_hash:wallet:condition:outcome:side:size:price).
         
     Returns:
-        True if trade has been processed (and not expired), False otherwise.
+        True if fill has been processed (and not expired), False otherwise.
     """
     db = get_db()
     processed_trades_collection = db['processedTrades']
     
-    # Check if trade exists and hasn't expired
+    # Check if fill exists and hasn't expired
     doc = processed_trades_collection.find_one({
-        'txHash': tx_hash,
+        'fillKey': fill_key,
         'expiresAt': { '$gt': datetime.utcnow() }
     })
     
@@ -252,13 +252,29 @@ def is_trade_processed(tx_hash: str) -> bool:
 
 def ensure_processed_trades_ttl_index() -> None:
     """
-    Ensure TTL index exists on processedTrades collection.
+    Ensure TTL index and unique index exist on processedTrades collection.
     
-    This should be called once at startup to create the index
-    that automatically deletes expired documents.
+    Creates:
+    - Unique index on fillKey (prevents duplicate fills)
+    - TTL index on expiresAt (auto-deletes expired documents)
+    
+    This should be called once at startup to create the indexes.
     """
     db = get_db()
     processed_trades_collection = db['processedTrades']
+    
+    # Create unique index on fillKey
+    try:
+        processed_trades_collection.create_index(
+            'fillKey',
+            unique=True,
+            name='fillKey_unique_idx'
+        )
+        print("   ✅ Created unique index on fillKey in processedTrades collection")
+    except Exception as e:
+        # Index might already exist, which is fine
+        if 'already exists' not in str(e).lower():
+            print(f"   ⚠️  Could not create fillKey unique index: {e}")
     
     # Create TTL index on expiresAt field (if it doesn't exist)
     # MongoDB will automatically delete documents after expiresAt
@@ -268,7 +284,7 @@ def ensure_processed_trades_ttl_index() -> None:
             expireAfterSeconds=0,  # Delete immediately when expiresAt is reached
             name='ttl_index_expiresAt'
         )
-        print("   ✅ Created TTL index on processedTrades collection")
+        print("   ✅ Created TTL index on expiresAt in processedTrades collection")
     except Exception as e:
         # Index might already exist, which is fine
         if 'already exists' not in str(e).lower():

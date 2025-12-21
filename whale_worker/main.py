@@ -24,10 +24,10 @@ from whale_worker.polymarket_client import (
     fetch_sports_tag_ids,
     fetch_tags_dictionary,
 )
-from whale_worker.filters import get_matching_users_for_trade
-from whale_worker.notifications import send_alerts_for_trade
+from whale_worker.filters import get_matching_users_for_trade, get_matching_users_for_aggregated_trade
+from whale_worker.notifications import send_alerts_for_trade, send_alerts_for_aggregated_trade
 from whale_worker.notification_queue import get_notification_queue
-from whale_worker.types import TradeMarker
+from whale_worker.types import Trade, AggregatedTrade, TradeMarker
 
 
 def run_worker() -> None:
@@ -192,29 +192,29 @@ def run_worker() -> None:
                     print("   No new trades found")
                 else:
                     # Filter out trades we've already processed
-                    # Strategy: Rely on processedTrades TTL collection for deduplication
-                    # (The API doesn't support minTimestamp, so we always fetch latest N trades)
-                    # 
-                    # The cursor (last_processed_tx_hash) is kept for logging/info purposes,
-                    # but we don't rely on it for filtering since the API always returns
-                    # the latest trades regardless of timestamp.
-                    new_trades = []
+                    # Step 1: Fill-level deduplication
+                    # Each fill (row) from API is treated as a separate Trade.
+                    # Deduplication happens at the fill level using fillKey.
+                    new_fills = []
                     seen_cursor = False
                     
-                    # Check each trade against deduplication set
-                    for trade in trades:
-                        # Check if already processed (primary deduplication method)
-                        if is_trade_processed(trade.transaction_hash):
+                    # Check each fill against deduplication set (by fillKey, not transaction_hash)
+                    for fill in trades:
+                        # Generate unique fill key for this fill
+                        fill_key = fill.get_fill_key()
+                        
+                        # Check if this exact fill was already processed
+                        if is_trade_processed(fill_key):
                             continue
                         
                         # Track if we see the cursor trade (for logging/info)
                         if last_marker and last_marker.last_processed_tx_hash:
-                            if trade.transaction_hash == last_marker.last_processed_tx_hash:
+                            if fill.transaction_hash == last_marker.last_processed_tx_hash:
                                 seen_cursor = True
-                                # Don't break - continue processing newer trades
+                                # Don't break - continue processing newer fills
                                 # (cursor is just for info, not filtering)
                         
-                        new_trades.append(trade)
+                        new_fills.append(fill)
                     
                     # Log cursor status (informational only)
                     if last_marker and last_marker.last_processed_tx_hash:
@@ -223,25 +223,48 @@ def run_worker() -> None:
                         else:
                             print(f"   ℹ️  Cursor trade not in response (may have expired from dedupe set or filtered by API)")
                     
-                    print(f"   Found {len(new_trades)} new trades to process (after deduplication)")
+                    print(f"   Found {len(new_fills)} new fills to process (after fill-level deduplication)")
                     
-                    # OPTIMIZATION: Batch fetch market metadata for all missing markets
-                    # Step 1: Collect all condition_ids that need metadata
+                    # Step 2: Aggregate fills into whale trades
+                    # Group fills by: (transaction_hash, proxy_wallet, condition_id, outcome, side)
+                    from collections import defaultdict
+                    fill_groups = defaultdict(list)
+                    
+                    for fill in new_fills:
+                        agg_key = fill.get_aggregation_key()
+                        fill_groups[agg_key].append(fill)
+                    
+                    # Create AggregatedTrade objects from fill groups
+                    aggregated_trades = []
+                    for agg_key, fills in fill_groups.items():
+                        # Mark all fills in this group as processed
+                        for fill in fills:
+                            fill_key = fill.get_fill_key()
+                            mark_trade_as_processed(fill_key)
+                        
+                        # Aggregate fills into single whale trade
+                        aggregated_trade = AggregatedTrade.from_fills(fills)
+                        aggregated_trades.append(aggregated_trade)
+                    
+                    print(f"   Aggregated into {len(aggregated_trades)} whale trades (from {len(new_fills)} fills)")
+                    
+                    # Step 3: Batch fetch market metadata for all aggregated trades
+                    # Collect all condition_ids that need metadata
                     missing_condition_ids = []
-                    condition_id_to_trades = {}  # Map condition_id -> list of trades
+                    condition_id_to_aggregated_trades = {}  # Map condition_id -> list of aggregated trades
                     
-                    for trade in new_trades:
-                        if trade.condition_id:
+                    for agg_trade in aggregated_trades:
+                        if agg_trade.condition_id:
                             # Check cache first
-                            cached_market = get_or_upsert_market(trade.condition_id)
+                            cached_market = get_or_upsert_market(agg_trade.condition_id)
                             if not cached_market:
                                 # Not in cache - add to batch fetch list
-                                if trade.condition_id not in condition_id_to_trades:
-                                    missing_condition_ids.append(trade.condition_id)
-                                    condition_id_to_trades[trade.condition_id] = []
-                                condition_id_to_trades[trade.condition_id].append(trade)
+                                if agg_trade.condition_id not in condition_id_to_aggregated_trades:
+                                    missing_condition_ids.append(agg_trade.condition_id)
+                                    condition_id_to_aggregated_trades[agg_trade.condition_id] = []
+                                condition_id_to_aggregated_trades[agg_trade.condition_id].append(agg_trade)
                     
-                    # Step 2: Batch fetch all missing markets in one API call
+                    # Batch fetch all missing markets in one API call
                     if missing_condition_ids:
                         print(f"   📦 Batch fetching metadata for {len(missing_condition_ids)} markets...")
                         batch_metadata = fetch_market_metadata_batch(
@@ -250,27 +273,21 @@ def run_worker() -> None:
                             tags_dict=tags_dict
                         )
                         
-                        # Step 3: Store all fetched markets in cache
+                        # Store all fetched markets in cache
                         for condition_id, metadata in batch_metadata.items():
                             get_or_upsert_market(condition_id, metadata)
                         
                         print(f"   ✅ Fetched {len(batch_metadata)}/{len(missing_condition_ids)} markets")
                     
-                    # Step 4: Process each new trade (markets are now in cache)
-                    for i, trade in enumerate(new_trades, 1):
-                        # Mark as processed immediately to prevent duplicate processing
-                        # (even if processing fails later, we don't want to retry immediately)
-                        mark_trade_as_processed(trade.transaction_hash)
-                        
-                        notional = trade.notional
-                        
-                        # Step 5: Get market metadata (now from cache or batch fetch)
+                    # Step 4: Process each aggregated whale trade
+                    for i, agg_trade in enumerate(aggregated_trades, 1):
+                        # Get market metadata (now from cache or batch fetch)
                         market = None
-                        if trade.condition_id:
+                        if agg_trade.condition_id:
                             # Get from cache (should be there now after batch fetch)
-                            market = get_or_upsert_market(trade.condition_id)
+                            market = get_or_upsert_market(agg_trade.condition_id)
                             
-                            # Log trade with market info and categorization
+                            # Log aggregated trade with market info and categorization
                             if market:
                                 # Build category string
                                 category_parts = []
@@ -290,33 +307,36 @@ def run_worker() -> None:
                                     tag_labels = [tags_dict.get(tid, {}).get("label", tid) for tid in market.tag_ids[:3]]
                                     tags_str = f" | tags: {', '.join(tag_labels)}"
                                 
-                                print(f"   [{i}/{len(new_trades)}] Trade {trade.transaction_hash[:10]}... | "
-                                      f"${notional:,.2f} | {trade.side} | {trade.price:.2%} | "
-                                      f"Market: {market.title[:50]}{category_str}{tags_str}")
-                                
-                                # Step 4: Match trade against user filters
-                                matching_users = get_matching_users_for_trade(trade, market, all_user_filters)
-                                if matching_users:
-                                    print(f"      🔔 Matches {len(matching_users)} user(s): {', '.join([f.user_id[:8] for f in matching_users])}")
-                                    # Step 5: Send Telegram notifications
-                                    send_alerts_for_trade(trade, market, matching_users)
-                                else:
-                                    print(f"      ⏭️  No matching users")
+                                fill_count_str = f" ({agg_trade.fill_count} fills)" if agg_trade.fill_count > 1 else ""
+                                print(f"   [{i}/{len(aggregated_trades)}] Whale Trade {agg_trade.transaction_hash[:10]}...{fill_count_str} | "
+                                      f"${agg_trade.total_notional_usd:,.2f} | {agg_trade.side} | {agg_trade.vwap_price:.2%} | "
+                                      f"{market.title[:50]}{category_str}{tags_str}")
                             else:
-                                print(f"   [{i}/{len(new_trades)}] Trade {trade.transaction_hash[:10]}... | "
-                                      f"${notional:,.2f} | {trade.side} | {trade.price:.2%} | "
-                                      f"Market: Unknown (conditionId: {trade.condition_id[:10]}...)")
+                                fill_count_str = f" ({agg_trade.fill_count} fills)" if agg_trade.fill_count > 1 else ""
+                                print(f"   [{i}/{len(aggregated_trades)}] Whale Trade {agg_trade.transaction_hash[:10]}...{fill_count_str} | "
+                                      f"${agg_trade.total_notional_usd:,.2f} | {agg_trade.side} | {agg_trade.vwap_price:.2%} | No market metadata")
                         else:
-                            print(f"   [{i}/{len(new_trades)}] Trade {trade.transaction_hash[:10]}... | "
-                                  f"${notional:,.2f} | {trade.side} | {trade.price:.2%} | "
-                                  f"No conditionId")
+                            fill_count_str = f" ({agg_trade.fill_count} fills)" if agg_trade.fill_count > 1 else ""
+                            print(f"   [{i}/{len(aggregated_trades)}] Whale Trade {agg_trade.transaction_hash[:10]}...{fill_count_str} | "
+                                  f"${agg_trade.total_notional_usd:,.2f} | {agg_trade.side} | {agg_trade.vwap_price:.2%} | No condition_id")
+                        
+                        if market:
+                            # Step 5: Match against user filters and send alerts (using aggregated trade)
+                            matching_users = get_matching_users_for_aggregated_trade(agg_trade, market, all_user_filters)
+                            if matching_users:
+                                print(f"      🔔 Matches {len(matching_users)} user(s): {', '.join([f.user_id[:8] for f in matching_users])}")
+                                send_alerts_for_aggregated_trade(agg_trade, market, matching_users)
+                            else:
+                                print(f"      ⏭️  No matching users")
+                        else:
+                            print(f"      ⚠️  No market metadata, skipping filter matching")
                     
-                    # Update marker to the newest trade we processed
-                    if new_trades:
-                        newest_trade = new_trades[0]  # Already sorted newest first
+                    # Update marker to the newest aggregated trade we processed
+                    if aggregated_trades:
+                        newest_agg_trade = aggregated_trades[0]  # Already sorted newest first
                         last_marker = TradeMarker(
-                            last_processed_timestamp=newest_trade.timestamp,
-                            last_processed_tx_hash=newest_trade.transaction_hash,
+                            last_processed_timestamp=newest_agg_trade.timestamp,
+                            last_processed_tx_hash=newest_agg_trade.transaction_hash,
                         )
                         set_last_processed_trade_marker(last_marker)
                         print(f"   ✅ Updated marker: timestamp={last_marker.last_processed_timestamp}")

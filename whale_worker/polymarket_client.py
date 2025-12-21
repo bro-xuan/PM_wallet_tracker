@@ -80,8 +80,11 @@ def fetch_recent_trades(
             data = response.json()
         
         # Convert to Trade objects
+        # NOTE: We do NOT deduplicate by transaction_hash here.
+        # Each fill (row) from the API is treated as a separate Trade.
+        # Deduplication happens later at the fill level using fillKey.
         trades = []
-        seen_hashes = set()  # Deduplicate by transaction hash
+        seen_fill_keys = set()  # Deduplicate exact duplicate fills (same all fields)
         
         for item in data:
             # Extract transaction hash (required field)
@@ -89,14 +92,49 @@ def fetch_recent_trades(
             if not tx_hash:
                 continue
             
-            # Skip if we've already seen this trade (deduplication within this batch)
-            if tx_hash in seen_hashes:
-                continue
-            seen_hashes.add(tx_hash)
+            # Extract required fields
+            size = float(item.get("size", 0))
+            price = float(item.get("price", 0))
+            timestamp = int(item.get("timestamp", 0))
+            proxy_wallet = item.get("proxyWallet", "")
+            side = item.get("side", "").upper()
+            condition_id = item.get("conditionId")
+            outcome = item.get("outcome")
             
-            # Skip if this trade was already processed (check by hash)
-            if last_marker and last_marker.last_processed_tx_hash == tx_hash:
+            # Skip trades with invalid data
+            if size <= 0 or price <= 0 or timestamp <= 0:
                 continue
+            
+            # Skip if side is not BUY or SELL
+            if side not in ["BUY", "SELL"]:
+                continue
+            
+            # Create Trade object first to generate fill key
+            trade = Trade(
+                transaction_hash=tx_hash,
+                proxy_wallet=proxy_wallet.lower() if proxy_wallet else "",
+                side=side,
+                size=size,
+                price=price,
+                condition_id=condition_id,
+                outcome=outcome,
+                timestamp=timestamp,
+            )
+            
+            # Only deduplicate exact duplicate fills (same fill key)
+            # This handles API-level duplicates, not multi-fill transactions
+            fill_key = trade.get_fill_key()
+            if fill_key in seen_fill_keys:
+                continue  # Skip exact duplicate fill
+            seen_fill_keys.add(fill_key)
+            
+            # Skip if this exact fill was already processed (check by fill key, not tx hash)
+            # Note: This check is now done later in main.py using processedTrades
+            # We keep this here for backward compatibility with last_marker
+            if last_marker and last_marker.last_processed_tx_hash == tx_hash:
+                # Only skip if we're still using cursor-based deduplication
+                # (This will be removed once fill-level deduplication is fully implemented)
+                pass  # Don't skip - we want all fills now
             
             # Extract required fields
             size = float(item.get("size", 0))

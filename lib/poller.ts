@@ -32,8 +32,12 @@ async function wallets(): Promise<string[]> {
     });
     return Array.from(set);
   } catch (error: any) {
-    // More detailed error logging
-    if (error.name === 'MongoServerSelectionError' || error.name === 'MongoNetworkTimeoutError') {
+    // Check for DNS resolution errors (cached connection issue)
+    if (error.message?.includes('ENOTFOUND') || error.message?.includes('getaddrinfo')) {
+      console.error('[poller] MongoDB DNS resolution error - possible cached connection issue.');
+      console.error('[poller] Solution: Restart Next.js dev server to clear cached connection.');
+      console.error('[poller] Error details:', error.message);
+    } else if (error.name === 'MongoServerSelectionError' || error.name === 'MongoNetworkTimeoutError') {
       console.error('[poller] MongoDB connection timeout - check network/MongoDB URI:', error.message);
     } else {
       console.error('[poller] Error fetching wallets from MongoDB:', error);
