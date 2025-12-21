@@ -1513,7 +1513,7 @@ export default function Home() {
             )}
           </div>
         ) : !session ? null : activeTab === 'whale-alerts' ? (
-          <div style={{maxWidth:'600px', margin:'0 auto', padding:'40px 20px'}}>
+          <div style={{maxWidth:'900px', width:'100%', margin:'0 auto', padding:'40px 20px', gridColumn:'1/-1'}}>
             <section className="card" style={{padding:32}}>
               <h3 style={{marginTop:0, marginBottom:24}}>Whale Trades Alerts</h3>
               <p className="muted" style={{marginBottom:32}}>
@@ -1822,47 +1822,6 @@ export default function Home() {
                         <div style={{fontSize:12, color:'var(--muted)', marginTop:4}}>
                           Exclude trades from these categories
                         </div>
-                      </div>
-
-                      {/* Category Filter (Tag IDs) - Advanced */}
-                      <div>
-                        <label style={{display:'block', fontSize:14, marginBottom:8, color:'var(--ink)'}}>
-                          Include Only Tag IDs (Advanced)
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="Comma-separated tag IDs (e.g., 766, 21, 235)"
-                          value={alertConfig.categoryFilter.join(', ')}
-                          onChange={e => {
-                            const tags = e.target.value.split(',').map(t => t.trim()).filter(t => t && t.length > 0);
-                            setAlertConfig(prev => ({...prev, categoryFilter: tags}));
-                          }}
-                          style={{
-                            width:'100%',
-                            padding:'8px 12px',
-                            borderRadius:6,
-                            border:'1px solid var(--line)',
-                            background:'var(--bg)',
-                            color:'var(--ink)',
-                            fontSize:14
-                          }}
-                        />
-                        <div style={{fontSize:12, color:'var(--muted)', marginTop:4}}>
-                          Only show trades with these tag IDs (leave empty for all)
-                        </div>
-                      </div>
-
-                      {/* Enabled Toggle */}
-                      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between'}}>
-                        <label style={{fontSize:14, color:'var(--ink)', cursor:'pointer'}}>
-                          Enable Alerts
-                        </label>
-                        <input
-                          type="checkbox"
-                          checked={alertConfig.enabled}
-                          onChange={e => setAlertConfig(prev => ({...prev, enabled: e.target.checked}))}
-                          style={{cursor:'pointer'}}
-                        />
                       </div>
                     </div>
 
