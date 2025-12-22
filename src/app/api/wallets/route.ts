@@ -1,9 +1,31 @@
 import { auth } from '@/lib/auth';
 import clientPromise from '@/lib/mongodb';
 import { isAddress } from '@/lib/util';
+import type { Collection } from 'mongodb';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+// Make sure we only create indexes for the wallets collection once per
+// server process. Without this, every page load that hits this endpoint
+// can pay extra round-trips to MongoDB.
+const globalAny = globalThis as any;
+
+async function ensureWalletsIndexes(walletsCollection: Collection) {
+  if (!globalAny.__PM_WALLETS_INDEXES_PROMISE__) {
+    globalAny.__PM_WALLETS_INDEXES_PROMISE__ = (async () => {
+      try {
+        await walletsCollection.createIndex(
+          { userId: 1, isActive: 1, address: 1 },
+          { name: 'user_active_address' },
+        );
+      } catch (err) {
+        console.error('Failed to ensure wallets indexes', err);
+      }
+    })();
+  }
+  await globalAny.__PM_WALLETS_INDEXES_PROMISE__;
+}
 
 export async function GET() {
   const session = await auth();
@@ -14,6 +36,8 @@ export async function GET() {
   const client = await clientPromise;
   const db_mongo = client.db(process.env.MONGODB_DB_NAME || 'pm-wallet-tracker');
   const walletsCollection = db_mongo.collection('wallets');
+
+  await ensureWalletsIndexes(walletsCollection);
 
   const wallets = await walletsCollection.find(
     { userId: session.user.id, isActive: true },
@@ -47,6 +71,8 @@ export async function POST(req: Request) {
   const client = await clientPromise;
   const db = client.db(process.env.MONGODB_DB_NAME || 'pm-wallet-tracker');
   const walletsCollection = db.collection('wallets');
+
+  await ensureWalletsIndexes(walletsCollection);
 
   const added: string[] = [];
   const rejected: string[] = [];

@@ -1,8 +1,29 @@
 import { auth } from '@/lib/auth';
 import clientPromise from '@/lib/mongodb';
+import type { Collection } from 'mongodb';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+// Ensure indexes are created only once per server process instead of
+// on every request (which adds avoidable latency on hot paths).
+const globalAny = globalThis as any;
+
+async function ensureTradesIndexes(tradesCollection: Collection) {
+  if (!globalAny.__PM_TRADES_INDEXES_PROMISE__) {
+    globalAny.__PM_TRADES_INDEXES_PROMISE__ = (async () => {
+      try {
+        await tradesCollection.createIndex({ proxyWallet: 1, timestamp: -1 });
+        await tradesCollection.createIndex({ timestamp: -1 });
+      } catch (err) {
+        console.error('Failed to ensure trades indexes', err);
+      }
+    })();
+  }
+  // Always await the same promise so concurrent requests don't all try
+  // to create indexes.
+  await globalAny.__PM_TRADES_INDEXES_PROMISE__;
+}
 
 export async function GET(req: Request) {
   const session = await auth();
@@ -42,9 +63,8 @@ export async function GET(req: Request) {
 
   const tradesCollection = db_mongo.collection('trades');
 
-  // Ensure useful indexes (noop if they already exist)
-  await tradesCollection.createIndex({ proxyWallet: 1, timestamp: -1 }).catch(() => {});
-  await tradesCollection.createIndex({ timestamp: -1 }).catch(() => {});
+  // Ensure useful indexes (done once per process instead of every request)
+  await ensureTradesIndexes(tradesCollection);
 
   const filter: any = {
     proxyWallet: { $in: userWalletAddresses },
